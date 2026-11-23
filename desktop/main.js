@@ -15,6 +15,7 @@ const { theme, watchTheme } = require('./theme');
 // ---- updates from GitHub releases ----
 const semver = (v) => String(v).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
 const newer = (a, b) => { const x = semver(a), y = semver(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+const curVersion = () => process.env.AGENTS_FAKE_VERSION || app.getVersion();
 let latest = null, installing = false;
 async function checkUpdate() {
   try {
@@ -25,8 +26,8 @@ async function checkUpdate() {
     const asset = (j.assets || []).find((a) => a.name.endsWith(`linux-${arch}.AppImage`));
     const sums = (j.assets || []).find((a) => a.name === 'SHA256SUMS');
     latest = { version: String(j.tag_name).replace(/^v/, ''), notes: j.body || '', page: j.html_url, url: asset?.browser_download_url, sums: sums?.browser_download_url, name: asset?.name, size: asset?.size || 0 };
-    return { ok: true, current: app.getVersion(), latest: latest.version, available: newer(latest.version, app.getVersion()), notes: latest.notes, page: latest.page, canInstall: !!(process.env.APPIMAGE && latest.url) };
-  } catch (e) { return { ok: false, current: app.getVersion(), error: e.name === 'TimeoutError' ? 'GitHub did not answer in time' : e.message }; }
+    return { ok: true, current: curVersion(), latest: latest.version, available: newer(latest.version, curVersion()), notes: latest.notes, page: latest.page, canInstall: !!(process.env.APPIMAGE && latest.url) };
+  } catch (e) { return { ok: false, current: curVersion(), error: e.name === 'TimeoutError' ? 'GitHub did not answer in time' : e.message }; }
 }
 async function installUpdate() {
   if (installing) return { ok: false, error: 'Already updating.' };
@@ -46,6 +47,7 @@ async function installUpdate() {
       if (!want || want !== hash.digest('hex')) throw new Error('the download did not match its checksum, so I kept your current version');
     }
     fs.chmodSync(tmp, 0o755); fs.renameSync(tmp, target);
+    if (process.env.AGENTS_SELFTEST) return { ok: true, selftest: true };
     setTimeout(() => { app.relaunch({ execPath: target, args: [] }); app.exit(0); }, 400);
     return { ok: true };
   } catch (e) { try { fs.unlinkSync(tmp); } catch {} installing = false; return { ok: false, error: e.message }; }
@@ -76,10 +78,12 @@ ipcMain.on('win', (e, act) => {
 ipcMain.handle('theme', () => theme());
 ipcMain.handle('update-check', () => checkUpdate());
 ipcMain.handle('update-install', () => installUpdate());
-ipcMain.handle('version', () => app.getVersion());
+ipcMain.handle('version', () => curVersion());
 ipcMain.on('open-external', (_e, url) => { if (/^https:\/\/github\.com\//.test(url)) shell.openExternal(url); });
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (process.env.AGENTS_SELFTEST) {
+  app.whenReady().then(async () => { console.log('CHECK', JSON.stringify(await checkUpdate())); console.log('INSTALL', JSON.stringify(await installUpdate())); app.exit(0); });
+} else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => { create(); watchTheme(send); });

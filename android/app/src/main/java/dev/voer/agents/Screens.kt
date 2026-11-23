@@ -41,6 +41,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Context
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import org.json.JSONObject
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -51,15 +55,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private fun fmtN(n: Long) = when { n >= 1_000_000 -> "%.1fM".format(n / 1e6); n >= 1000 -> "%.1fk".format(n / 1e3); else -> n.toString() }
-private fun String.modelName(models: List<Pair<String, String>>): String = models.firstOrNull { it.first == this }?.second ?: this
-private fun ago(t: Long): String { if (t == 0L) return ""; val s = (System.currentTimeMillis() / 1000 - t).coerceAtLeast(0); return when { s < 60 -> "just now"; s < 3600 -> "${s / 60} min ago"; s < 86400 -> "${s / 3600} h ago"; else -> "${s / 86400} d ago" } }
+internal fun fmtN(n: Long) = when { n >= 1_000_000 -> "%.1fM".format(n / 1e6); n >= 1000 -> "%.1fk".format(n / 1e3); else -> n.toString() }
+internal fun String.modelName(models: List<Pair<String, String>>): String = models.firstOrNull { it.first == this }?.second ?: this
+internal fun ago(t: Long): String { if (t == 0L) return ""; val s = (System.currentTimeMillis() / 1000 - t).coerceAtLeast(0); return when { s < 60 -> "just now"; s < 3600 -> "${s / 60} min ago"; s < 86400 -> "${s / 3600} h ago"; else -> "${s / 86400} d ago" } }
 
-@Composable private fun <T> motionSpec(ms: Int) = if (LocalMotion.current) tween<T>(ms) else snap()
-@Composable private fun cardColors() = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainerHigh)
-@Composable private fun cardBorder() = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-@Composable private fun Muted(t: String, mod: Modifier = Modifier) = Text(t, mod, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-@Composable private fun Label(t: String) = Text(t.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+@Composable internal fun <T> motionSpec(ms: Int) = if (LocalMotion.current) tween<T>(ms) else snap()
+@Composable internal fun cardColors() = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainerHigh)
+@Composable internal fun cardBorder() = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+@Composable internal fun Muted(t: String, mod: Modifier = Modifier) = Text(t, mod, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+@Composable internal fun Label(t: String) = Text(t.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
 fun SectionCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) =
@@ -108,6 +112,15 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     var serverVersion by remember { mutableStateOf("") }
     var updProgress by remember { mutableStateOf<Float?>(null) }
     var dismissed by remember { mutableStateOf(false) }
+    var jobs by remember { mutableStateOf<List<Job>?>(null) }
+    var acts by remember { mutableStateOf<List<Act>>(emptyList()) }
+    var srv by remember { mutableStateOf<SrvSettings?>(null) }
+    var paused by remember { mutableStateOf(false) }
+    var actLast by remember { mutableLongStateOf(0L) }
+    var rev by remember { mutableLongStateOf(0L) }
+    var jobEditing by remember { mutableStateOf<Pair<Job?, Boolean>?>(null) }
+    val state = remember { ctx.getSharedPreferences("state", Context.MODE_PRIVATE) }
+    var seen by remember { mutableLongStateOf(state.getLong("seen", -1L)) }
     val scope = rememberCoroutineScope()
     val appVersion = remember { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "" }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -117,15 +130,19 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
         try { models = withContext(Dispatchers.IO) { api.models() } } catch (_: ApiError) {}
         try { serverVersion = withContext(Dispatchers.IO) { api.health() } } catch (_: Exception) {}
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            var rev = 0L
+            rev = 0L
             while (true) {
-                try { val l = withContext(Dispatchers.IO) { api.agents(rev) }; rev = l.rev; agents = l.agents; err = "" }
+                try { val l = withContext(Dispatchers.IO) { api.agents(rev) }; rev = l.rev; agents = l.agents; paused = l.paused; actLast = l.actLast; err = "" }
                 catch (e: CancellationException) { throw e }
                 catch (e: ApiError) { err = e.message ?: "offline"; rev = 0; delay(4000) }
                 catch (e: Exception) { rev = 0; delay(2000) }
             }
         }
     }
+    LaunchedEffect(actLast) { try { acts = withContext(Dispatchers.IO) { api.activity().second }; if (seen < 0) { seen = actLast; state.edit().putLong("seen", seen).apply() } } catch (_: ApiError) {} }
+    LaunchedEffect(tab, rev) { try { when (tab) { 1 -> jobs = withContext(Dispatchers.IO) { api.jobs() }; 4 -> srv = withContext(Dispatchers.IO) { api.settings() } } } catch (_: ApiError) {} }
+    LaunchedEffect(tab, actLast) { if (tab == 2 && actLast > 0) { delay(800); seen = actLast; state.edit().putLong("seen", seen).apply() } }
+    LaunchedEffect(prefs.notify) { if (prefs.notify) Notifier.schedule(ctx) }
     suspend fun checkRelease(manual: Boolean) {
         try { release = withContext(Dispatchers.IO) { Updater.latest() }; relErr = ""; if (manual) dismissed = false }
         catch (e: ApiError) { relErr = e.message ?: "" }
@@ -150,8 +167,9 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     BackHandler(open != null) { open = null }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (current == null) NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-            listOf(Triple("Agents", L.Bot, 0), Triple("Usage", L.Chart, 1), Triple("Settings", L.Sliders, 2)).forEach { (label, icon, i) ->
-                NavigationBarItem(tab == i, { tab = i }, { Icon(icon, null) }, label = { Text(label) },
+            listOf(Triple("Agents", L.Bot, 0), Triple("Tasks", L.Clock, 1), Triple("Activity", L.Bell, 2), Triple("Usage", L.Chart, 3), Triple("Settings", L.Sliders, 4)).forEach { (label, icon, i) ->
+                val n = if (i == 2) acts.count { it.id > seen && it.kind != "system" } else 0
+                NavigationBarItem(tab == i, { tab = i }, { BadgedBox({ if (n > 0) Badge { Text(if (n > 9) "9+" else n.toString()) } }) { Icon(icon, null) } }, label = { Text(label, maxLines = 1) },
                     colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = .12f), unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
             }
         }
@@ -173,14 +191,17 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
                     if (id != -1L && current != null) ChatScreen(api, current, models, { open = null }, { editing = current to true }, { a -> scope.launch { try { withContext(Dispatchers.IO) { api.pin(a.id, !a.pinned) } } catch (_: ApiError) {} } })
                     else when (tab) {
                         0 -> AgentsTab(agents, err, models, !(updateReady && !dismissed), { open = it }, { editing = null to true })
-                        1 -> UsageTab(agents ?: emptyList(), err, models, !(updateReady && !dismissed))
-                        else -> SettingsTab(api, prefs, onPrefs, err, appVersion, serverVersion, release, relErr, updateReady, updProgress != null, { scope.launch { checkRelease(true) } }, ::startUpdate,
+                        1 -> TasksTab(jobs, err, paused, !(updateReady && !dismissed), api, { scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }, { p -> scope.launch { try { withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("paused", p)) }; paused = p } catch (_: ApiError) {} } }, { jobEditing = it to true })
+                        2 -> ActivityTab(acts, seen, err, !(updateReady && !dismissed))
+                        3 -> UsageTab(agents ?: emptyList(), err, models, !(updateReady && !dismissed))
+                        else -> SettingsTab(api, prefs, onPrefs, err, appVersion, serverVersion, release, relErr, updateReady, updProgress != null, srv, { srv = it }, actLast, { scope.launch { checkRelease(true) } }, ::startUpdate,
                             { scope.launch { try { val to = withContext(Dispatchers.IO) { api.updateServer() }; relErr = "Updating the server to ${to.removePrefix("agents-server ")}…"; delay(6000); serverVersion = withContext(Dispatchers.IO) { api.health() }; relErr = "" } catch (e: ApiError) { relErr = e.message ?: "" } } }, onLogout)
                     }
                 }
             }
         }
     }
+    if (jobEditing != null) JobEditorSheet(jobEditing!!.first, agents ?: emptyList(), srv?.tz ?: java.util.TimeZone.getDefault().id, api, open, { jobEditing = null }, { jobEditing = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } })
     if (editing != null) {
         val a = editing!!.first
         EditorSheet(a, models, api, onClose = { editing = null }, onSaved = { id -> if (a == null) open = id; editing = null }, onDeleted = { open = null; editing = null })
@@ -281,7 +302,8 @@ fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, onBac
             if (msgs.isEmpty() && !running) item { Muted("Say something to ${agent.spec.name}.", Modifier.fillMaxWidth().padding(32.dp)) }
             items(msgs.size) { i ->
                 val m = msgs[i]
-                if (m.role == "user") Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (m.role == "auto") { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { Icon(L.Clock, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(6.dp)); Muted(m.text) } }
+                else if (m.role == "user") Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, border = cardBorder(), modifier = Modifier.widthIn(max = 300.dp)) { Text(m.text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) }
                 } else Row(verticalAlignment = Alignment.Top) {
                     Text(if (m.role == "error") AnnotatedString(m.text) else md(m.text), color = if (m.role == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -354,7 +376,7 @@ fun UsageTab(agents: List<Agent>, err: String, models: List<Pair<String, String>
 
 @Composable
 fun SettingsTab(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, err: String, appVersion: String, serverVersion: String, release: Release?, relErr: String, updateReady: Boolean, updating: Boolean,
-                onCheck: () -> Unit, onUpdate: () -> Unit, onUpdateServer: () -> Unit, onLogout: () -> Unit) {
+                srv: SrvSettings?, onSrv: (SrvSettings) -> Unit, lastAct: Long, onCheck: () -> Unit, onUpdate: () -> Unit, onUpdateServer: () -> Unit, onLogout: () -> Unit) {
     val serverNew = release != null && serverVersion.isNotEmpty() && newerVersion(release.version, serverVersion)
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("Settings", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); StatusPill(err) }
@@ -367,6 +389,7 @@ fun SettingsTab(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, err: String, a
                 colors = SliderDefaults.colors(inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant, inactiveTickColor = MaterialTheme.colorScheme.outline))
             Row(verticalAlignment = Alignment.CenterVertically) { Text("Reduce animations", Modifier.weight(1f)); Switch(prefs.reduceMotion, { onPrefs(prefs.copy(reduceMotion = it)) }) }
         }
+        AutoSettings(api, srv, prefs, onPrefs, onSrv, lastAct)
         SectionCard {
             Label("Updates")
             Text("This app: $appVersion" + when { release == null -> ""; updateReady -> " · version ${release.version} is ready"; else -> " · up to date" })
@@ -399,8 +422,10 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
     var custom by remember { mutableStateOf(if (s != null && models.none { it.first == s.model }) s.model else "") }
     var prompt by remember { mutableStateOf(s?.prompt ?: "") }; var memory by remember { mutableStateOf(s?.memory ?: "") }
     var mcp by remember { mutableStateOf(s?.mcp ?: "") }; var subs by remember { mutableStateOf(s?.subagents ?: false) }
+    var autonomy by remember { mutableStateOf(s?.autonomy ?: "safe") }; var osTools by remember { mutableStateOf(s?.osTools ?: true) }
+    var cap by remember { mutableStateOf(s?.dailyCap?.toString() ?: "") }; var workdir by remember { mutableStateOf(s?.workdir ?: "") }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
-    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs)
+    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir)
     ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (agent == null) "New agent" else "Edit agent", style = MaterialTheme.typography.headlineMedium)
@@ -414,6 +439,12 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("Instructions") }, minLines = 3, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(memory, { memory = it }, Modifier.fillMaxWidth(), label = { Text("Memory") }, minLines = 2, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(mcp, { mcp = it }, Modifier.fillMaxWidth(), label = { Text("Tools (MCP file on the server)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
+            Label("What it may do on the server")
+            Segmented(listOf("safe" to "Look only", "standard" to "Edit and browse", "full" to "Everything"), autonomy) { autonomy = it }
+            Muted(when (autonomy) { "safe" -> "Reads files and answers. Nothing is changed."; "standard" -> "Can edit files in its folder and search the web."; else -> "Can run any command on the server without asking. Only for agents you trust." })
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text("Agentic tools: message me, schedule tasks, remember, ask other agents", Modifier.weight(1f)); Switch(osTools, { osTools = it }) }
+            OutlinedTextField(cap, { cap = it.filter { c -> c.isDigit() || c == '.' } }, Modifier.fillMaxWidth(), label = { Text("Daily limit for automatic runs ($, optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(workdir, { workdir = it }, Modifier.fillMaxWidth(), label = { Text("Working folder (optional)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text("Can start subagents", Modifier.weight(1f)); Switch(subs, { subs = it }) }
             if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {

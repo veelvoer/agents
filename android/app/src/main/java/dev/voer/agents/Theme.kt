@@ -22,12 +22,12 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 
 /** What the user chose in Settings. Kept on this phone. */
-data class Prefs(val mode: String = "system", val colors: String = "clay", val textScale: Float = 1f, val reduceMotion: Boolean = false, val autoUpdate: Boolean = true) {
+data class Prefs(val mode: String = "system", val colors: String = "clay", val textScale: Float = 1f, val reduceMotion: Boolean = false, val autoUpdate: Boolean = true, val notify: Boolean = false) {
     fun save(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
-        .putString("mode", mode).putString("colors", colors).putFloat("scale", textScale).putBoolean("reduce", reduceMotion).putBoolean("auto", autoUpdate).apply()
+        .putString("mode", mode).putString("colors", colors).putFloat("scale", textScale).putBoolean("reduce", reduceMotion).putBoolean("auto", autoUpdate).putBoolean("notify", notify).apply()
     companion object {
         fun load(ctx: Context): Prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).let {
-            Prefs(it.getString("mode", "system")!!, it.getString("colors", "clay")!!, it.getFloat("scale", 1f), it.getBoolean("reduce", false), it.getBoolean("auto", true))
+            Prefs(it.getString("mode", "system")!!, it.getString("colors", "clay")!!, it.getFloat("scale", 1f), it.getBoolean("reduce", false), it.getBoolean("auto", true), it.getBoolean("notify", false))
         }
     }
 }

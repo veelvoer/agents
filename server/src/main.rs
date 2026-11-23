@@ -158,6 +158,9 @@ struct Job {
     runs: u64,
     #[serde(default)]
     cost: f64,
+    /// Short notes the agent writes for itself between runs (what it covered, what comes next).
+    #[serde(default)]
+    notes: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -405,7 +408,7 @@ fn job_json(j: &Job, tz: &str, agent_name: &str) -> Value {
         "id": j.id, "agent_id": j.agent_id, "agent": agent_name, "name": j.name, "prompt": j.prompt, "schedule": j.schedule, "human": describe(&j.schedule, &jtz),
         "enabled": j.enabled, "fresh": j.fresh, "notify": j.notify, "max_turns": j.max_turns, "hook": j.hook,
         "next_at": j.next_at, "next": j.next_at.map(|t| local_text(t, &jtz)), "last_run": j.last_run, "last_status": j.last_status, "last_text": cut(&j.last_text, 600),
-        "fails": j.fails, "runs": j.runs, "cost": j.cost,
+        "fails": j.fails, "runs": j.runs, "cost": j.cost, "notes": j.notes,
     })
 }
 
@@ -589,22 +592,25 @@ struct RunOpts {
     max_turns: Option<u32>,
     depth: u32,
     job_name: Option<String>,
+    job_id: Option<u64>,
     check_cap: bool,
 }
 
 struct Out { text: String, ok: bool, limited: bool, cost: f64 }
 
+const DEFAULT_RUN_PROMPT: &str = "It is time for your scheduled run. Do what your instructions say, now.";
+
 const OS_PREAMBLE: &str = "You are the agent \"{name}\" on an always-on server, working for one person. It is {now}. \
 You have the agentic-os tools: notify (message the user), schedule_task (do something later or on repeat), list_tasks, delete_task, remember (keep a short fact), ask_agent (delegate to another agent). \
 When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. Be brief and concrete.";
 
-fn mcp_config_for(s: &S, id: u64, depth: u32) -> Option<PathBuf> {
+fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let port = s.addr.rsplit(':').next().unwrap_or("7777");
     let dir = data_dir(s).join("mcp");
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("{id}-d{depth}.json"));
-    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string()}}}});
+    let path = dir.join(format!("{id}-d{depth}-j{}.json", job.unwrap_or(0)));
+    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string(), "AGENT_JOB": job.unwrap_or(0).to_string()}}}});
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).ok()?;
     f.write_all(cfg.to_string().as_bytes()).ok()?;
@@ -617,9 +623,10 @@ fn looks_limited(t: &str) -> bool {
 }
 
 async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (StatusCode, String)> {
-    let (spec, session, name, settings, cancel) = {
+    let (spec, session, name, settings, cancel, job_notes) = {
         let mut g = s.db.lock().await;
         let settings = g.settings.clone();
+        let job_notes = o.job_id.and_then(|j| g.jobs.iter().find(|x| x.id == j)).map(|j| j.notes.clone()).unwrap_or_default();
         let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
         if a.running { return Err((StatusCode::CONFLICT, "this agent is still working on something else".into())); }
         if o.check_cap {
@@ -632,7 +639,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         a.last_active = now();
         let cancel = Arc::new(Notify::new());
         s.rt.lock().await.cancel.insert(id, cancel.clone());
-        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel)
+        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes)
     };
     if let Some(l) = &o.label { append_msg(s, id, "auto", l).await; } else { append_msg(s, id, "user", msg).await; }
     bump(s);
@@ -642,17 +649,25 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     if spec.os_tools { sp.push_str("\n\n"); sp.push_str(&OS_PREAMBLE.replace("{name}", &name).replace("{now}", &chrono::Utc::now().with_timezone(&tz).format("%A %Y-%m-%d %H:%M (%Z)").to_string())); }
     if !settings.global_memory.is_empty() { sp.push_str("\n\nShared memory (all agents):\n"); sp.push_str(&settings.global_memory); }
     if !spec.memory.is_empty() { sp.push_str("\n\nMemory:\n"); sp.push_str(&spec.memory); }
-    if let Some(j) = &o.job_name { sp.push_str(&format!("\n\nThis is an automatic run of the task \"{j}\". Nobody is here to answer questions. Do the task and reply with only the final result, short and clear.")); }
+    if let Some(j) = &o.job_name {
+        sp.push_str(&format!("\n\nThis is an automatic scheduled run (\"{j}\"). Nobody is here to answer questions, so do not ask any. Do the job now and reply with only the result the user should read, short and clear. Do not say that you will do it later, and do not schedule anything: the schedule already exists."));
+        if spec.os_tools {
+            sp.push_str(&format!("\n\nYour notes from earlier runs of this job (you wrote them):\n{}\nIf the job builds on earlier runs (a series of lessons, tracking something, not repeating yourself), end the run by calling save_task_notes with a short updated summary: what is done so far and what comes next. Keep it under 1500 characters.", if job_notes.trim().is_empty() { "(nothing yet: this is the first run)" } else { job_notes.trim() }));
+        }
+    }
 
     let workdir = spec.workdir.clone().filter(|w| !w.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir(s).join("workspaces").join(id.to_string()));
     let _ = std::fs::create_dir_all(&workdir);
-    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth) } else { None };
+    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id) } else { None };
 
     let build = |resume: Option<&str>| {
         let mut c = Command::new("claude");
         c.args(["-p", msg, "--output-format", "json", "--model", &spec.model]);
         if !sp.is_empty() { c.args(["--append-system-prompt", &sp]); }
-        if !spec.subagents { c.args(["--disallowedTools", "Task"]); }
+        let mut denied: Vec<&str> = vec![];
+        if !spec.subagents { denied.push("Task"); }
+        if o.job_name.is_some() { denied.push("mcp__agentic-os__schedule_task"); }
+        if !denied.is_empty() { c.args(["--disallowedTools", &denied.join(",")]); }
         let mut allowed: Vec<&str> = vec![];
         if spec.os_tools { allowed.push("mcp__agentic-os"); }
         match spec.autonomy.as_str() {
@@ -838,7 +853,10 @@ async fn activity(State(s): State<S>, Query(q): Query<ActQ>) -> Json<Value> {
 struct JobReq {
     agent_id: u64,
     name: String,
+    #[serde(default)]
     prompt: String,
+    #[serde(default)]
+    notes: Option<String>,
     #[serde(default)]
     schedule: Option<Schedule>,
     #[serde(default)]
@@ -858,7 +876,6 @@ fn new_hook() -> String { let mut b = [0u8; 16]; if let Ok(mut f) = std::fs::Fil
 fn build_job(r: &JobReq, tz: &str, id: u64, old: Option<&Job>) -> Result<Job, (StatusCode, String)> {
     let bad = |m: String| (StatusCode::BAD_REQUEST, m);
     if r.name.trim().is_empty() { return Err(bad("Give the task a name.".into())); }
-    if r.prompt.trim().is_empty() { return Err(bad("Say what the task should do.".into())); }
     if !["always", "errors", "never"].contains(&r.notify.as_str()) { return Err(bad("notify must be always, errors or never".into())); }
     let schedule = match (&r.schedule, &r.when) {
         (Some(sch), _) => {
@@ -880,6 +897,7 @@ fn build_job(r: &JobReq, tz: &str, id: u64, old: Option<&Job>) -> Result<Job, (S
         next_at: next, schedule,
         last_run: old.and_then(|o| o.last_run), last_status: old.and_then(|o| o.last_status.clone()), last_text: old.map(|o| o.last_text.clone()).unwrap_or_default(),
         fails: 0, runs: old.map_or(0, |o| o.runs), cost: old.map_or(0.0, |o| o.cost),
+        notes: cut(&r.notes.clone().or_else(|| old.map(|o| o.notes.clone())).unwrap_or_default(), 2000).trim_end_matches('…').to_string(),
     })
 }
 
@@ -939,6 +957,17 @@ async fn jobs_enabled(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<Ena
     }
 }
 
+#[derive(Deserialize)]
+struct NotesReq { notes: String }
+
+async fn jobs_notes(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<NotesReq>) -> StatusCode {
+    let mut g = s.db.lock().await;
+    match g.jobs.iter_mut().find(|j| j.id == id) {
+        Some(j) => { j.notes = cut(&r.notes, 2000).trim_end_matches('…').to_string(); save(&g, &s.file); drop(g); bump(&s); StatusCode::OK }
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
 async fn jobs_run_now(State(s): State<S>, Path(id): Path<u64>) -> StatusCode {
     if !s.db.lock().await.jobs.iter().any(|j| j.id == id) { return StatusCode::NOT_FOUND; }
     if s.rt.lock().await.jobs_running.contains(&id) { return StatusCode::CONFLICT; }
@@ -963,8 +992,9 @@ async fn run_job(s: S, job_id: u64, extra: Option<String>) {
     let Some(job) = job else { return };
     if !s.rt.lock().await.jobs_running.insert(job_id) { return; }
     let Ok(_permit) = s.sem.acquire().await else { return };
-    let prompt = match &extra { Some(e) => format!("{}\n\nInput from the trigger:\n{e}", job.prompt), None => job.prompt.clone() };
-    let res = run_agent(&s, job.agent_id, &prompt, RunOpts { fresh: job.fresh, label: Some(format!("Task: {}", job.name)), max_turns: job.max_turns.or(Some(15)), job_name: Some(job.name.clone()), check_cap: true, ..Default::default() }).await;
+    let base = if job.prompt.trim().is_empty() { DEFAULT_RUN_PROMPT.to_string() } else { job.prompt.clone() };
+    let prompt = match &extra { Some(e) => format!("{base}\n\nInput from the trigger:\n{e}"), None => base };
+    let res = run_agent(&s, job.agent_id, &prompt, RunOpts { fresh: job.fresh, label: Some(format!("Scheduled: {}", job.name)), max_turns: job.max_turns.or(Some(15)), job_name: Some(job.name.clone()), job_id: Some(job_id), check_cap: true, ..Default::default() }).await;
     s.rt.lock().await.jobs_running.remove(&job_id);
     let agent_name = s.db.lock().await.agents.iter().find(|a| a.id == job.agent_id).map(|a| a.spec.name.clone()).unwrap_or_default();
     let title = format!("{} · {}", job.name, agent_name);
@@ -1270,6 +1300,7 @@ async fn main() {
         .route("/jobs/{id}", axum::routing::put(jobs_update).delete(jobs_delete))
         .route("/jobs/{id}/enabled", post(jobs_enabled))
         .route("/jobs/{id}/run", post(jobs_run_now))
+        .route("/jobs/{id}/notes", post(jobs_notes))
         .route("/hook/{secret}", post(hook).get(hook_get))
         .route("/activity", get(activity))
         .route("/notify", post(notify))

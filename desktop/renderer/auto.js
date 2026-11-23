@@ -58,7 +58,7 @@ function repeatDialog(agent, jobId) {
   const all = jobsOf(agent.id);
   const job = jobId === 0 ? null : (all.find((j) => j.id === jobId) || all.find((j) => j.enabled) || all[0] || null);
   const st = fromSchedule(job?.schedule);
-  const f = { prompt: job?.prompt || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
+  const f = { prompt: job?.prompt || '', notes: job?.notes || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
   const d = document.createElement('div'); d.className = 'scrim';
   const types = [['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['every', 'Every…'], ['once', 'Once'], ['hook', 'Web link'], ['manual', 'Manual'], ['cron', 'Cron']];
   const draw = () => {
@@ -66,7 +66,8 @@ function repeatDialog(agent, jobId) {
     <p class="tip" style="margin-top:-8px">The agent does this by itself on the server, even when this app is closed, and tells you the result.</p>
     ${all.length > 1 || (all.length && !job) ? `<div class="row wrap">${all.map((j, n) => `<button class="chip ${job && j.id === job.id ? 'on' : ''}" data-pick="${j.id}">${esc(j.name === agent.spec.name ? 'Repeat ' + (n + 1) : j.name)}</button>`).join('')}<button class="chip ${!job ? 'on' : ''}" data-pick="0">+ Another</button></div>` : ''}
     <div class="setrow"><span class="grow"><b>${f.enabled ? 'Repeating' : 'Not repeating'}</b></span><button class="toggle ${f.enabled ? 'on' : ''}" id="r-en" role="switch" aria-checked="${f.enabled}" aria-label="Repeating"></button></div>
-    <div class="field"><label class="label" for="jp">What should it do each time?</label><textarea id="jp" placeholder="Check the news about my topics and give me the three most important things.">${esc(f.prompt)}</textarea></div>
+    <div class="field"><label class="label" for="jp">Message to send each time (optional)</label><textarea id="jp" placeholder="${agent.spec.prompt.trim() ? 'Leave empty: the agent just follows its own instructions.' : 'For example: Check the news about my topics and give me the three most important things.'}">${esc(f.prompt)}</textarea>
+    <p class="tip">${agent.spec.prompt.trim() ? 'This agent already has instructions, so you can leave this empty and only choose when.' : 'This agent has no instructions yet, so say here what it should do each time.'}</p></div>
     <div class="field"><span class="label">When</span><div class="row wrap">${types.map(([v, l]) => `<button class="chip ${st.type === v ? 'on' : ''}" data-t="${v}" aria-pressed="${st.type === v}">${l}</button>`).join('')}</div>
     <div class="row wrap">${['daily', 'weekdays', 'weekends', 'weekly'].includes(st.type) ? `${st.type === 'weekly' ? `<select id="jd" style="width:auto">${DAYS.map((x, i) => `<option value="${i}" ${String(i) === st.dow ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}<span class="small muted">at</span><input id="jt" type="time" value="${st.time}" style="width:auto">` : ''}
     ${st.type === 'every' ? `<span class="small muted">every</span><input id="je" type="number" min="1" value="${st.every}" style="width:90px"><select id="ju" style="width:auto">${['minutes', 'hours', 'days'].map((u) => `<option ${u === st.unit ? 'selected' : ''}>${u}</option>`).join('')}</select>` : ''}
@@ -76,12 +77,13 @@ function repeatDialog(agent, jobId) {
     ${st.type === 'manual' ? '<span class="small muted">It only runs when you press Run now.</span>' : ''}</div>
     ${['daily', 'weekdays', 'weekends', 'weekly', 'cron'].includes(st.type) ? `<span class="small muted">Times use ${esc(srvTz())}. Change it in Settings.</span>` : ''}</div>
     <div class="setrow"><span class="grow">Message me the result</span>${seg('j-notify', [['always', 'Always'], ['errors', 'If it fails'], ['never', 'Never']], f.notify)}</div>
-    <div class="setrow"><span class="grow">Memory between runs</span>${seg('j-fresh', [['1', 'Fresh each time'], ['0', 'Keep the chat']], f.fresh ? '1' : '0')}</div>
-    <p class="tip" style="margin-top:-6px">${f.fresh ? 'Fresh each time is cheaper: it does not carry old conversation along.' : 'It continues this agent\'s own chat, so it remembers earlier runs but uses more tokens over time.'}</p>
+    <div class="setrow"><span class="grow">Memory between runs</span>${seg('j-fresh', [['1', 'Remember progress'], ['0', 'Keep the whole chat']], f.fresh ? '1' : '0')}</div>
+    <p class="tip" style="margin-top:-6px">${f.fresh ? 'Each run starts fresh (cheap), but the agent keeps short notes for itself. A series like daily lessons never repeats itself and keeps building.' : 'It continues this agent\'s own chat, so it remembers everything but uses more tokens over time.'}</p>
+    ${f.fresh && job ? `<div class="field"><label class="label" for="jn">What it remembers (it writes this itself, you can edit)</label><textarea id="jn" placeholder="Nothing yet. It fills in after the first run.">${esc(f.notes)}</textarea></div>` : ''}
     ${job && job.hook ? `<div class="small muted">Web link: <span class="kbd selectable">/hook/${esc(job.hook.slice(0, 8))}…</span> <button class="link" id="jcopy">Copy link</button></div>` : ''}
     <p id="e" class="err small" role="alert"></p>
     <div class="row wrap">${job ? '<button class="ghost" id="jdel">Stop repeating</button><button class="ghost" id="jrun">Run now</button>' : ''}<span class="grow"></span><button class="ghost" id="jcancel">Cancel</button><button class="primary" id="jsave">Save</button></div></div>`;
-    const keep = () => { f.prompt = $('#jp', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
+    const keep = () => { f.prompt = $('#jp', d).value; if ($('#jn', d)) f.notes = $('#jn', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
     $$('[data-t]', d).forEach((b) => (b.onclick = () => { keep(); st.type = b.dataset.t; draw(); }));
     $$('[data-pick]', d).forEach((b) => (b.onclick = () => { d.remove(); repeatDialog(agent, +b.dataset.pick); }));
     $('#r-en', d).onclick = () => { keep(); f.enabled = !f.enabled; draw(); };
@@ -92,10 +94,10 @@ function repeatDialog(agent, jobId) {
     $('#jrun', d)?.addEventListener('click', async () => { try { await api('POST', `/jobs/${job.id}/run`); toast('Started'); d.remove(); } catch (e) { $('#e', d).textContent = e.message; } });
     $('#jsave', d).onclick = async () => {
       keep(); const err = (m) => { $('#e', d).textContent = m; };
-      if (!f.prompt.trim()) return err('Say what it should do each time.');
+      if (!f.prompt.trim() && !agent.spec.prompt.trim()) return err('Say what it should do each time, or give the agent instructions first.');
       let schedule; try { schedule = toSchedule(st); } catch (e) { return err(e.message); }
       $('#jsave', d).disabled = true;
-      try { const body = { agent_id: agent.id, name: job?.name || agent.spec.name, prompt: f.prompt, schedule, enabled: f.enabled, fresh: f.fresh, notify: f.notify }; if (job) await api('PUT', `/jobs/${job.id}`, body); else await api('POST', '/jobs', body); d.remove(); toast(f.enabled ? 'Repeating' : 'Saved'); refreshJobs(); }
+      try { const body = { agent_id: agent.id, name: job?.name || agent.spec.name, prompt: f.prompt, schedule, enabled: f.enabled, fresh: f.fresh, notify: f.notify }; if (job) body.notes = f.notes; if (job) await api('PUT', `/jobs/${job.id}`, body); else await api('POST', '/jobs', body); d.remove(); toast(f.enabled ? 'Repeating' : 'Saved'); refreshJobs(); }
       catch (e) { err(`Couldn't save: ${e.message}`); $('#jsave', d).disabled = false; }
     };
     $('#jdel', d)?.addEventListener('click', () => { d.remove(); confirmBox(`Stop repeating ${agent.spec.name}?`, 'It will no longer run by itself. Past results stay in Activity.', 'Stop repeating', async () => { await api('DELETE', `/jobs/${job.id}`); refreshJobs(); }); });

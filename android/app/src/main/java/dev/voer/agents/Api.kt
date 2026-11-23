@@ -15,7 +15,7 @@ data class Msg(val role: String, val text: String, val at: Long)
 data class Page(val start: Int, val total: Int, val messages: List<Msg>)
 data class AgentList(val rev: Long, val agents: List<Agent>, val actLast: Long = 0, val paused: Boolean = false)
 data class Job(val id: Long, val agentId: Long, val agent: String, val name: String, val prompt: String, val human: String, val enabled: Boolean, val fresh: Boolean, val notify: String,
-               val next: String?, val lastRun: Long, val lastStatus: String?, val lastText: String, val runs: Int, val cost: Double, val hook: String?, val running: Boolean, val schedule: JSONObject)
+               val next: String?, val lastRun: Long, val lastStatus: String?, val lastText: String, val runs: Int, val cost: Double, val hook: String?, val running: Boolean, val schedule: JSONObject, val notes: String = "")
 data class Act(val id: Long, val at: Long, val kind: String, val agentId: Long, val jobId: Long, val title: String, val body: String)
 data class SrvSettings(val paused: Boolean, val maxParallel: Int, val tz: String, val memory: String, val tgToken: Boolean, val tgPaired: Boolean, val tgCode: String?, val ntfyServer: String, val ntfyTopic: String, val webhook: Boolean)
 
@@ -58,7 +58,7 @@ class Api(val url: String, val key: String) {
         val j = a.getJSONObject(it)
         Job(j.getLong("id"), j.getLong("agent_id"), j.optString("agent"), j.getString("name"), j.optString("prompt"), j.optString("human"), j.optBoolean("enabled"), j.optBoolean("fresh", true), j.optString("notify", "always"),
             if (j.isNull("next")) null else j.optString("next"), if (j.isNull("last_run")) 0 else j.optLong("last_run"), if (j.isNull("last_status")) null else j.optString("last_status"), j.optString("last_text"),
-            j.optInt("runs"), j.optDouble("cost"), if (j.isNull("hook")) null else j.optString("hook"), j.optBoolean("running"), j.getJSONObject("schedule"))
+            j.optInt("runs"), j.optDouble("cost"), if (j.isNull("hook")) null else j.optString("hook"), j.optBoolean("running"), j.getJSONObject("schedule"), j.optString("notes"))
     } }
     fun saveJob(id: Long?, body: JSONObject) { if (id == null) call("POST", "/jobs", body.toString()) else call("PUT", "/jobs/$id", body.toString()) }
     fun deleteJob(id: Long) { call("DELETE", "/jobs/$id") }

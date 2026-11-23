@@ -81,6 +81,7 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
     var pick by remember { mutableStateOf(jobs.firstOrNull { it.enabled }?.id ?: jobs.firstOrNull()?.id ?: 0L) }   // 0 = a new repeat
     val job = jobs.firstOrNull { it.id == pick }
     var prompt by remember(pick) { mutableStateOf(job?.prompt ?: "") }
+    var notes by remember(pick) { mutableStateOf(job?.notes ?: "") }
     val st = remember(pick) { mutableStateOf(fromSchedule(job?.schedule)) }
     var notify by remember(pick) { mutableStateOf(job?.notify ?: "always") }
     var fresh by remember(pick) { mutableStateOf(job?.fresh ?: true) }
@@ -99,7 +100,8 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
                 FilterChip(pick == 0L, { pick = 0L }, { Text("+ Another") }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors)
             }
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (enabled) "Repeating" else "Not repeating", Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Switch(enabled, { enabled = it }) }
-            OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("What should it do each time?") }, placeholder = { Text("Check the news about my topics and give me the three most important things.") }, minLines = 3, shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("Message to send each time (optional)") }, placeholder = { Text(if (agent.spec.prompt.isNotBlank()) "Leave empty: the agent just follows its own instructions." else "For example: Check the news about my topics and give me the three most important things.") }, minLines = 3, shape = RoundedCornerShape(12.dp))
+            Muted(if (agent.spec.prompt.isNotBlank()) "This agent already has instructions, so you can leave this empty and only choose when." else "This agent has no instructions yet, so say here what it should do each time.")
             Label("When")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { types.forEach { (v, l) -> FilterChip(st.value.type == v, { upd { type = v } }, { Text(l) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors) } }
             val t = st.value.type
@@ -116,8 +118,9 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
             if (t == "hook") Muted("You get a private web link. Anything that calls it (a phone shortcut, GitHub, another service) starts the agent and hands its text to it.")
             if (t == "manual") Muted("It only runs when you press Run now.")
             Label("Message me the result"); Segmented(listOf("always" to "Always", "errors" to "If it fails", "never" to "Never"), notify) { notify = it }
-            Label("Memory between runs"); Segmented(listOf("1" to "Fresh each time", "0" to "Keep the chat"), if (fresh) "1" else "0") { fresh = it == "1" }
-            Muted(if (fresh) "Fresh each time is cheaper: it does not carry old conversation along." else "It continues this agent's own chat, so it remembers earlier runs but uses more tokens over time.")
+            Label("Memory between runs"); Segmented(listOf("1" to "Remember progress", "0" to "Keep the whole chat"), if (fresh) "1" else "0") { fresh = it == "1" }
+            Muted(if (fresh) "Each run starts fresh (cheap), but the agent keeps short notes for itself. A series like daily lessons never repeats itself and keeps building." else "It continues this agent's own chat, so it remembers everything but uses more tokens over time.")
+            if (fresh && job != null) OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("What it remembers (it writes this itself)") }, placeholder = { Text("Nothing yet. It fills in after the first run.") }, minLines = 2, shape = RoundedCornerShape(12.dp))
             if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 if (job != null) {
@@ -126,10 +129,10 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
                 }
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Cancel") }
                 Button({
-                    if (prompt.isBlank()) { err = "Say what it should do each time."; return@Button }
+                    if (prompt.isBlank() && agent.spec.prompt.isBlank()) { err = "Say what it should do each time, or give the agent instructions first."; return@Button }
                     val sched = try { toSchedule(st.value, tz) } catch (e: ApiError) { err = e.message ?: ""; return@Button }
                     busy = true
-                    scope.launch { try { withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agent.id).put("name", job?.name ?: agent.spec.name).put("prompt", prompt).put("schedule", sched).put("enabled", enabled).put("fresh", fresh).put("notify", notify)) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
+                    scope.launch { try { withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agent.id).put("name", job?.name ?: agent.spec.name).put("prompt", prompt).put("schedule", sched).put("enabled", enabled).put("fresh", fresh).put("notify", notify).also { if (job != null) it.put("notes", notes) }) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
                 }, Modifier.heightIn(min = 48.dp), enabled = !busy, shape = RoundedCornerShape(12.dp)) { Text(if (busy) "Saving…" else "Save") }
             }
         }

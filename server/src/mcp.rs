@@ -22,10 +22,13 @@ fn tools() -> Value {
         {"name": "schedule_task", "description": "Schedule a task for yourself. At the time, you run the prompt in a fresh session and the result is sent to the user. Use it when the user asks for something recurring or for later (for example: every morning, in 2 hours, every Monday).",
          "inputSchema": {"type": "object", "properties": {
             "name": {"type": "string", "description": "Short name"},
-            "prompt": {"type": "string", "description": "Exactly what to do each time. It runs without this conversation, so include everything needed."},
+            "prompt": {"type": "string", "description": "Exactly what to do each time. It runs without this conversation, so include everything needed. Leave empty to follow the agent's own instructions."},
+            "notes": {"type": "string", "description": "Optional plan for a series that builds on earlier runs (for example a lesson plan). The job reads and updates these notes on every run."},
             "when": {"type": "string", "description": "One of: 'daily 08:00', 'weekdays 08:30', 'weekly monday 09:00', 'every 30 minutes', 'every 2 hours', 'in 45 minutes', 'at 2026-12-01 09:00', or 'cron 0 8 * * *'. Times are in the user's time zone."},
             "notify": {"type": "string", "enum": ["always", "errors", "never"], "description": "Send the result to the user (default always)"}},
-          "required": ["name", "prompt", "when"]}},
+          "required": ["name", "when"]}},
+        {"name": "save_task_notes", "description": "Only during a scheduled run: save short notes for the next run of this same job (what you have covered so far and what comes next). Use it for series such as lessons or tracking, so you never repeat yourself. Replaces the old notes. Under 1500 characters.",
+         "inputSchema": {"type": "object", "properties": {"notes": {"type": "string"}}, "required": ["notes"]}},
         {"name": "list_tasks", "description": "List the scheduled tasks of all agents (id, name, schedule, next run).", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "delete_task", "description": "Delete a scheduled task by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
         {"name": "remember", "description": "Save a short fact so you (or all agents, with shared=true) remember it in every future session. Keep facts short; do not save secrets.",
@@ -42,8 +45,13 @@ fn run_tool(name: &str, a: &Value) -> Result<String, String> {
     match name {
         "notify" => { call("POST", "/notify", Some(json!({"title": s("title"), "body": s("message"), "agent_id": me})), 60)?; Ok("Sent.".into()) }
         "schedule_task" => {
-            let r = call("POST", "/jobs", Some(json!({"agent_id": me, "name": s("name"), "prompt": s("prompt"), "when": s("when"), "notify": if a["notify"].is_string() { s("notify") } else { "always".into() }, "fresh": true})), 30)?;
+            let r = call("POST", "/jobs", Some(json!({"agent_id": me, "name": s("name"), "prompt": s("prompt"), "notes": if a["notes"].is_string() { json!(s("notes")) } else { Value::Null }, "when": s("when"), "notify": if a["notify"].is_string() { s("notify") } else { "always".into() }, "fresh": true})), 30)?;
             Ok(format!("Scheduled (task {}). {}", r["id"], r["human"].as_str().unwrap_or("")) + &r["next"].as_str().map(|n| format!(" Next run: {n}.")).unwrap_or_default())
+        }
+        "save_task_notes" => {
+            let job: u64 = std::env::var("AGENT_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+            if job == 0 { return Err("save_task_notes only works during a scheduled run.".into()); }
+            call("POST", &format!("/jobs/{job}/notes"), Some(json!({"notes": s("notes")})), 30)?; Ok("Notes saved for the next run.".into())
         }
         "list_tasks" => {
             let r = call("GET", "/jobs", None, 30)?;

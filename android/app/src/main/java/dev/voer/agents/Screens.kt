@@ -440,6 +440,7 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             }
             OutlinedTextField(custom, { custom = it }, Modifier.fillMaxWidth(), label = { Text("Or type any model id") }, placeholder = { Text("claude-opus-5-5") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("Instructions") }, minLines = 3, shape = RoundedCornerShape(12.dp))
+            Muted("Describe the agent's job here. To make it work by itself, for example every morning, save it and then press Repeat in its chat.")
             OutlinedTextField(memory, { memory = it }, Modifier.fillMaxWidth(), label = { Text("Memory") }, minLines = 2, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(mcp, { mcp = it }, Modifier.fillMaxWidth(), label = { Text("Tools (MCP file on the server)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             Label("What it may do on the server")

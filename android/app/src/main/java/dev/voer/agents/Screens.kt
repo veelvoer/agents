@@ -363,7 +363,8 @@ fun SettingsTab(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, err: String, a
             Text("Colours"); Segmented(listOf("clay" to "Warm clay", "system" to "Match my phone"), prefs.colors) { onPrefs(prefs.copy(colors = it)) }
             if (prefs.colors == "system") Muted(if (dynamicColorsAvailable) "Using the colours of your wallpaper (Material You). They change when you change your wallpaper." else "This Android version has no wallpaper colours, so the warm clay colours are used.")
             Text("Light or dark"); Segmented(listOf("system" to "Like my phone", "light" to "Light", "dark" to "Dark"), prefs.mode) { onPrefs(prefs.copy(mode = it)) }
-            Text("Text size"); Slider(prefs.textScale, { onPrefs(prefs.copy(textScale = (Math.round(it * 20f) / 20f))) }, valueRange = 0.85f..1.3f, modifier = Modifier.semantics { contentDescription = "Text size" })
+            Text("Text size"); Slider(prefs.textScale, { onPrefs(prefs.copy(textScale = (Math.round(it * 20f) / 20f))) }, valueRange = 0.85f..1.3f, modifier = Modifier.semantics { contentDescription = "Text size" },
+                colors = SliderDefaults.colors(inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant, inactiveTickColor = MaterialTheme.colorScheme.outline))
             Row(verticalAlignment = Alignment.CenterVertically) { Text("Reduce animations", Modifier.weight(1f)); Switch(prefs.reduceMotion, { onPrefs(prefs.copy(reduceMotion = it)) }) }
         }
         SectionCard {

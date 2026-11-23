@@ -115,6 +115,7 @@ if [ "$USE_CADDY" = 1 ]; then
   fi
   $SUDO mkdir -p /etc/caddy
   printf '# Written by the Agents installer\n%s {\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tresponse_header_timeout 16m\n\t\t}\n\t}\n}\n' "$DOMAIN" "$PORT" | $SUDO tee /etc/caddy/agents.caddy >/dev/null
+  $SUDO chmod 644 /etc/caddy/agents.caddy   # Caddy runs as its own user and must be able to read it
   MAIN=/etc/caddy/Caddyfile
   if [ ! -f "$MAIN" ]; then echo "import /etc/caddy/agents.caddy" | $SUDO tee "$MAIN" >/dev/null
   elif ! grep -q 'import /etc/caddy/agents.caddy' "$MAIN"; then $SUDO cp "$MAIN" "$MAIN.bak-agents"; echo "import /etc/caddy/agents.caddy" | $SUDO tee -a "$MAIN" >/dev/null; fi

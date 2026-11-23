@@ -1,7 +1,7 @@
 {
   "name": "agents-desktop",
   "productName": "Agents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Run and watch your Claude agents",
   "main": "main.js",
   "private": true,
@@ -27,6 +27,7 @@
     },
     "files": [
       "main.js",
+      "theme.js",
       "preload.js",
       "renderer/**",
       "assets/**",

@@ -4,3 +4,4 @@ artifacts/
 *.log
 .env
 agents.json
+dist/

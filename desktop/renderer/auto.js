@@ -133,7 +133,7 @@ function jobEditor(job) {
     $('#jn', d).focus();
   };
   d.onclick = (e) => e.target === d && d.remove(); d.onkeydown = (e) => e.key === 'Escape' && d.remove();
-  draw(); document.body.appendChild(d);
+  draw(); document.body.appendChild(d); $('#jn', d)?.focus();
 }
 
 // ---- activity view ----

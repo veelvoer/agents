@@ -311,7 +311,7 @@ function editor(a) {
     $('#n', d).focus();
   };
   d.onclick = (e) => e.target === d && d.remove(); d.onkeydown = (e) => e.key === 'Escape' && d.remove();
-  draw(); document.body.appendChild(d);
+  draw(); document.body.appendChild(d); $('#n', d)?.focus();
 }
 
 // ---- usage ----
@@ -399,3 +399,7 @@ async function start() {
   cfg.autoUpdate && checkUpdates(false); clearInterval(start.t); start.t = setInterval(() => cfg.autoUpdate && checkUpdates(false), 6 * 3600e3);
 }
 if (conn) start(); else connectView();
+
+// While a dialog is open nothing on the page may act as a window drag area: on Linux a drag area under a dialog can swallow clicks and keys.
+new MutationObserver(() => document.documentElement.classList.toggle('modal', !!document.querySelector('.scrim'))).observe(document.body, { childList: true });
+window.addEventListener('focus', () => { const d = document.querySelector('.scrim input, .scrim textarea'); if (d && !document.activeElement?.matches('input, textarea, select')) d.focus(); });

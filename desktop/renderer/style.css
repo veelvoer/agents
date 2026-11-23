@@ -95,3 +95,7 @@ input[type=range]{padding:0;border:0;background:none;accent-color:var(--clay);mi
 .chip.sm{min-height:24px;padding:0 10px;font-size:12px;cursor:default}
 select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 10px;min-height:40px;width:100%;transition:border-color .15s;-webkit-app-region:no-drag}
 select:focus{border-color:var(--clay)}
+
+html.modal *{-webkit-app-region:no-drag !important}
+html.modal .wc{-webkit-app-region:no-drag !important}
+input,textarea,select{-webkit-user-select:text !important;user-select:text !important}

@@ -31,6 +31,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() { super.onStart(); Notifier.appVisible = true }
+    override fun onStop() { Notifier.appVisible = false; super.onStop() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

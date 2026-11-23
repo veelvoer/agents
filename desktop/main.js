@@ -64,7 +64,8 @@ function create() {
   Menu.setApplicationMenu(null);
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => { if (st.max) win.maximize(); win.show(); });
+  win.once('ready-to-show', () => { if (st.max) win.maximize(); win.show(); win.focus(); win.webContents.focus(); });
+  win.on('focus', () => win.webContents.focus());   // make sure the page gets the keyboard
   win.on('close', () => { const b = win.getNormalBounds(); fs.writeFileSync(stateFile(), JSON.stringify({ width: b.width, height: b.height, max: win.isMaximized() })); });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.on('maximize', () => send('max', true));

@@ -235,15 +235,20 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
     val scope = rememberCoroutineScope()
     var note by remember { mutableStateOf("") }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok || Build.VERSION.SDK_INT < 33) { Notifier.resetMarker(ctx, lastAct); Notifier.schedule(ctx); onPrefs(prefs.copy(notify = true)) } else note = "Notifications are blocked for this app in Android settings."
+        if (ok || Build.VERSION.SDK_INT < 33) { Notifier.enable(ctx, lastAct); onPrefs(prefs.copy(notify = true)) } else note = "Notifications are blocked for this app in Android settings."
     }
     fun put(b: JSONObject, msg: String = "") { scope.launch { try { onSrv(withContext(Dispatchers.IO) { api.putSettings(b) }); note = msg } catch (e: ApiError) { note = e.message ?: "" } } }
     SectionCard {
         Label("Phone notifications")
         Row(verticalAlignment = Alignment.CenterVertically) { Text("Show a notification for new results and messages", Modifier.weight(1f)); Switch(prefs.notify, { on ->
-            if (on) { if (Build.VERSION.SDK_INT >= 33) permission.launch(Manifest.permission.POST_NOTIFICATIONS) else { Notifier.resetMarker(ctx, lastAct); Notifier.schedule(ctx); onPrefs(prefs.copy(notify = true)) } }
-            else { Notifier.cancel(ctx); onPrefs(prefs.copy(notify = false)) } }) }
-        Muted("Android checks about every 15 minutes. For instant messages, also set up ntfy or Telegram below.")
+            if (on) { if (Build.VERSION.SDK_INT >= 33) permission.launch(Manifest.permission.POST_NOTIFICATIONS) else { Notifier.enable(ctx, lastAct); onPrefs(prefs.copy(notify = true)) } }
+            else { Notifier.disable(ctx); onPrefs(prefs.copy(notify = false)) } }) }
+        Muted(if (prefs.notify) "On. The app keeps one quiet connection to your server, so a message arrives the moment an agent has news. You will see a small silent \"Agents is listening\" notification: Android needs it to keep the connection alive." else "Turn this on to get a notification as soon as a task finishes or an agent messages you. You do not need Telegram or any other app.")
+        val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        if (prefs.notify && !pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
+            Muted("Some phones stop background apps to save battery. Allow Agents to keep running so messages are never late.")
+            OutlinedButton({ try { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${ctx.packageName}"))) } catch (_: Exception) { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Allow in the background") }
+        }
         if (note.isNotEmpty()) Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
     }
     if (srv == null) { SectionCard { Muted("Loading server settings…") }; return }

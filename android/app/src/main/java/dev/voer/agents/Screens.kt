@@ -142,7 +142,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     LaunchedEffect(actLast) { try { acts = withContext(Dispatchers.IO) { api.activity().second }; if (seen < 0) { seen = actLast; state.edit().putLong("seen", seen).apply() } } catch (_: ApiError) {} }
     LaunchedEffect(tab, rev) { try { when (tab) { 1 -> jobs = withContext(Dispatchers.IO) { api.jobs() }; 4 -> srv = withContext(Dispatchers.IO) { api.settings() } } } catch (_: ApiError) {} }
     LaunchedEffect(tab, actLast) { if (tab == 2 && actLast > 0) { delay(800); seen = actLast; state.edit().putLong("seen", seen).apply() } }
-    LaunchedEffect(prefs.notify) { if (prefs.notify) Notifier.schedule(ctx) }
+    LaunchedEffect(prefs.notify) { if (prefs.notify) { Notifier.schedule(ctx); ListenService.start(ctx) } }
     suspend fun checkRelease(manual: Boolean) {
         try { release = withContext(Dispatchers.IO) { Updater.latest() }; relErr = ""; if (manual) dismissed = false }
         catch (e: ApiError) { relErr = e.message ?: "" }

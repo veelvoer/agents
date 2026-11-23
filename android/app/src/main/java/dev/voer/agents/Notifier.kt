@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit
 /** Shows phone notifications for new results and messages. Android lets background work run about every 15 minutes;
  *  for instant messages add ntfy or Telegram in Settings. */
 object Notifier {
+    /** true while the app is on screen: then new results show up inside the app and no pop-up is needed */
+    @Volatile var appVisible = false
     private const val CHANNEL = "agents"
     private const val WORK = "agents-poll"
 
@@ -20,6 +22,8 @@ object Notifier {
         WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
     }
     fun cancel(ctx: Context) { WorkManager.getInstance(ctx).cancelUniqueWork(WORK) }
+    fun enable(ctx: Context, lastAct: Long) { resetMarker(ctx, lastAct); schedule(ctx); ListenService.start(ctx) }
+    fun disable(ctx: Context) { cancel(ctx); ListenService.stop(ctx) }
 
     fun resetMarker(ctx: Context, last: Long) { ctx.getSharedPreferences("state", Context.MODE_PRIVATE).edit().putLong("notified", last).apply() }
 
@@ -42,7 +46,7 @@ class PollWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         val last = st.getLong("notified", -1)
         return try {
             val (newest, items) = api.activity(after = if (last < 0) null else last, limit = 30)
-            if (last >= 0) items.filter { it.kind != "system" }.sortedBy { it.id }.forEach { Notifier.show(c, it) }
+            if (last >= 0 && !Notifier.appVisible) items.filter { it.kind != "system" }.sortedBy { it.id }.forEach { Notifier.show(c, it) }
             st.edit().putLong("notified", newest).apply()
             Result.success()
         } catch (e: ApiError) { Result.retry() }

@@ -276,7 +276,7 @@ function confirmBox(title, text, ok, fn) {
   const d = document.createElement('div'); d.className = 'scrim';
   d.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3><p class="muted small">${esc(text)}</p><div class="row" style="justify-content:flex-end"><button class="ghost" id="no">Keep</button><button class="primary" id="yes">${esc(ok)}</button></div></div>`;
   document.body.appendChild(d); const close = () => d.remove();
-  d.onclick = (e) => e.target === d && close(); d.onkeydown = (e) => e.key === 'Escape' && close(); $('#no', d).onclick = close;
+  d.onclick = (e) => { if (e.target === d) close(); }; d.onkeydown = (e) => { if (e.key === 'Escape') close(); }; $('#no', d).onclick = close;
   $('#yes', d).onclick = async () => { try { await fn(); } catch (e) { toast(e.message); } close(); }; $('#no', d).focus();
 }
 
@@ -315,7 +315,7 @@ function editor(a) {
     $('#del', d)?.addEventListener('click', () => { d.remove(); confirmBox(`Delete ${a.spec.name}?`, "Its chat, memory and usage totals are removed from the server. This can't be undone.", 'Delete', async () => { await api('DELETE', `/agents/${a.id}`); if (S.sel === a.id) { S.sel = null; renderPane(); } }); });
     $('#n', d).focus();
   };
-  d.onclick = (e) => e.target === d && d.remove(); d.onkeydown = (e) => e.key === 'Escape' && d.remove();
+  d.onclick = (e) => { if (e.target === d) d.remove(); }; d.onkeydown = (e) => { if (e.key === 'Escape') d.remove(); };
   draw(); document.body.appendChild(d); $('#n', d)?.focus();
 }
 

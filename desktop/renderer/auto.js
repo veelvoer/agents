@@ -101,7 +101,7 @@ function repeatDialog(agent, jobId) {
     $('#jdel', d)?.addEventListener('click', () => { d.remove(); confirmBox(`Stop repeating ${agent.spec.name}?`, 'It will no longer run by itself. Past results stay in Activity.', 'Stop repeating', async () => { await api('DELETE', `/jobs/${job.id}`); refreshJobs(); }); });
     ($('#jp', d)).focus();
   };
-  d.onclick = (e) => e.target === d && d.remove(); d.onkeydown = (e) => e.key === 'Escape' && d.remove();
+  d.onclick = (e) => { if (e.target === d) d.remove(); }; d.onkeydown = (e) => { if (e.key === 'Escape') d.remove(); };
   draw(); document.body.appendChild(d); $('#jp', d)?.focus();
 }
 

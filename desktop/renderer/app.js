@@ -227,7 +227,7 @@ async function togglePin(a) { try { await api('POST', `/agents/${a.id}/pin`, { p
 function renderPane() {
   const pane = $('#pane'); if (!pane) return; const a = byId(S.sel);
   if (!a) { pane.innerHTML = `<div class="empty">${MARK}<h3>Pick an agent</h3><p class="small">Choose one on the left, or press <span class="kbd">Ctrl</span> <span class="kbd">N</span> for a new one.</p></div>`; return; }
-  pane.innerHTML = `<div class="chat-head"><div class="grow"><h3 class="ellip" id="hname"></h3><div class="small muted ellip" id="meta"></div></div>
+  pane.innerHTML = `<div class="chat-head"><div class="grow"><h3 id="hname"></h3><div class="small muted" id="meta"></div></div>
   <button class="ic ghost" id="hpin"></button><button class="ic ghost" id="edit" aria-label="Edit agent" title="Edit agent">${icon('edit')}</button><button class="ic ghost" id="clear" aria-label="Clear chat" title="Clear chat">${icon('trash')}</button></div>
   <div class="msgs" id="msgs"><div class="col" id="col"></div></div>
   <div class="composer"><div class="cbox"><textarea id="in" rows="1" placeholder="Message ${esc(a.spec.name)}" aria-label="Message"></textarea><button class="primary" id="send"></button></div></div>`;

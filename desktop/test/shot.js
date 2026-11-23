@@ -7,7 +7,7 @@ ipcMain.handle('theme', () => theme()); ipcMain.handle('version', () => '0.3.0')
 const [url, key, out, colors = 'clay', mode = 'dark'] = process.argv.slice(-5);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.whenReady().then(async () => {
-  const w = new BrowserWindow({ width: 1100, height: 740, show: false, frame: false, webPreferences: { offscreen: true, preload: path.join(__dirname, '..', 'preload.js') } });
+  const w = new BrowserWindow({ width: +(process.env.W || 1100), height: +(process.env.H || 740), show: false, frame: false, webPreferences: { offscreen: true, preload: path.join(__dirname, '..', 'preload.js') } });
   const log = []; w.webContents.on('console-message', (_e, lvl, msg) => lvl >= 2 && log.push(msg));
   const shot = async (n) => { await wait(350); fs.writeFileSync(path.join(out, n + '.png'), (await w.webContents.capturePage()).toPNG()); };
   const js = (c) => w.webContents.executeJavaScript(c);

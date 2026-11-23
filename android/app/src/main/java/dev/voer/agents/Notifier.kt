@@ -33,7 +33,7 @@ object Notifier {
         val open = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(e.title.ifBlank { "Agents" })
             .setContentText(e.body.take(200)).setStyle(NotificationCompat.BigTextStyle().bigText(e.body.take(1200))).setContentIntent(open).setAutoCancel(true).build()
-        try { nm.notify(e.id.toInt(), n) } catch (_: SecurityException) { /* permission was taken away */ }
+        try { nm.notify(1000 + e.id.toInt(), n) } catch (_: SecurityException) { /* permission was taken away */ }
     }
 }
 

@@ -12,6 +12,7 @@ const ICONS = {
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>', play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>', alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>', stop: '<rect width="12" height="12" x="6" y="6" rx="2"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -66,6 +67,7 @@ function applyTheme() {
   r.dataset.motion = cfg.motion;
 }
 applyTheme();
+window.shell.getFrame().then((f) => { S.framed = f; document.documentElement.classList.toggle('framed', f); });
 window.shell.theme().then((t) => { sys = t; applyTheme(); if (S.tab === 'settings') settingsView(); });
 window.shell.onTheme((t) => { sys = t; applyTheme(); if (S.tab === 'settings') settingsView(); });
 
@@ -116,11 +118,11 @@ function connectView() {
 
 function mainShell() {
   const nav = (id, label, ic) => `<button class="${S.tab === id ? 'on' : ''}" data-tab="${id}" title="${label}" ${S.tab === id ? 'aria-current="page"' : ''}>${icon(ic)}<span class="lb">${label}</span></button>`;
-  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}<span class="lb">Agents</span></div>${nav('agents', 'Agents', 'bot')}${nav('auto', 'Automations', 'clock')}${nav('activity', 'Activity', 'bell')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav>
+  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}<span class="lb">Agents</span></div>${nav('agents', 'Agents', 'bot')}${nav('activity', 'Activity', 'bell')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav>
   <main id="main"><div id="banner"></div><div id="view" style="flex:1;min-height:0;display:flex;flex-direction:column"></div></main></div>${controls()}`;
   bindControls();
   $$('[data-tab]', root).forEach((b) => (b.onclick = () => go(b.dataset.tab)));
-  renderBanner(); updateBadge(); ({ agents: agentsView, auto: autoView, activity: activityView, usage: usageView, settings: settingsView })[S.tab]();
+  renderBanner(); updateBadge(); ({ agents: agentsView, activity: activityView, usage: usageView, settings: settingsView })[S.tab]();
 }
 function go(tab) { S.tab = tab; mainShell(); }
 const view = () => $('#view');
@@ -172,7 +174,8 @@ function onAgents() {
     if (p && (p.status !== a.status || p.messages !== a.messages)) { if (a.id === S.sel) syncMsgs(a.id); if (p.status === 'running' && a.status === 'idle' && cfg.notify && !document.hasFocus()) { try { new Notification(a.spec.name, { body: 'Finished working.', tag: 'agent-' + a.id }); } catch {} } }
     S.prev.set(a.id, { status: a.status, messages: a.messages });
   }
-  if (S.tab === 'agents') { renderSide(); updateHead(); if (S.sel && !byId(S.sel)) { S.sel = null; renderPane(); } } else if (S.tab === 'usage') usageView(); else if (S.tab === 'auto') refreshJobs(); else if (S.tab === 'settings') refreshSettings();
+  if (S.tab === 'agents') { renderSide(); updateHead(); if (S.sel && !byId(S.sel)) { S.sel = null; renderPane(); } } else if (S.tab === 'usage') usageView(); else if (S.tab === 'settings') refreshSettings();
+  if (S.tab !== 'agents') return; refreshJobsSoon();
 }
 async function syncMsgs(id, older) {
   try {
@@ -197,7 +200,7 @@ function agentsView() {
 function itemHtml(a) {
   const run = a.status === 'running';
   return `<div class="item ${S.sel === a.id ? 'on' : ''}" role="button" tabindex="0" draggable="${!S.q}" data-id="${a.id}"><div class="t"><span class="dot ${a.status}"></span><span class="ellip grow">${esc(a.spec.name)}</span>${a.pinned ? `<span class="pin" aria-label="Pinned">${icon('pin')}</span>` : ''}${run ? '<span class="small muted">working</span>' : ''}</div>
-  <div class="small muted">${esc(modelName(a.spec.model))} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>
+  <div class="small muted">${esc(modelName(a.spec.model))} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>${(() => { const r = repeatInfo(a); return r ? `<div class="small ${r.on ? '' : 'muted'} repeatline">${icon('repeat')}<span>${esc(r.text)}</span></div>` : ''; })()}
   <div class="act"><button class="ic" data-pin="${a.id}" aria-label="${a.pinned ? 'Unpin' : 'Pin'} ${esc(a.spec.name)}" title="${a.pinned ? 'Unpin' : 'Pin to top'}">${icon('pin')}</button></div></div>`;
 }
 function renderSide() {
@@ -207,10 +210,11 @@ function renderSide() {
   const list = q ? all.filter((a) => (a.spec.name + ' ' + modelName(a.spec.model)).toLowerCase().includes(q)) : all;
   const pinned = list.filter((a) => a.pinned), rest = list.filter((a) => !a.pinned);
   side.innerHTML = `<div class="row" style="padding:0 4px 8px"><h2 class="grow">Agents</h2><button class="primary" id="new" title="New agent (Ctrl+N)">${icon('plus')}New</button></div>
-  <div class="search">${icon('search')}<input id="q" placeholder="Search agents" aria-label="Search agents" value="${esc(S.q)}"></div><div class="pill-slot">${S.err ? statusPill() : ''}</div>
+  <div class="search">${icon('search')}<input id="q" placeholder="Search agents" aria-label="Search agents" value="${esc(S.q)}"></div><div class="pill-slot">${S.err ? statusPill() : ''}</div>${S.paused ? '<div class="card row warnbox" style="padding:10px 12px"><span class="grow small">Repeating is paused.</span><button class="primary sm" id="resume">Resume</button></div>' : ''}
   ${!all.length && !S.err ? '<p class="muted small" style="padding:8px 4px">No agents yet. Press New to create one.</p>' : ''}${all.length && !list.length ? '<p class="muted small" style="padding:8px 4px">No agent matches that.</p>' : ''}
   ${pinned.length ? `<div class="sec">Pinned</div>${pinned.map(itemHtml).join('')}` : ''}${pinned.length && rest.length ? '<div class="sec">Agents</div>' : ''}${rest.map(itemHtml).join('')}`;
   $('#new').onclick = () => editor(null);
+  $('#resume')?.addEventListener('click', async () => { try { S.srv = await api('PUT', '/settings', { paused: false }); S.paused = false; renderSide(); toast('Repeating resumed'); } catch (e) { toast(e.message); } });
   const q2 = $('#q'); q2.oninput = () => { S.q = q2.value; renderSide(); $('#q').focus(); $('#q').setSelectionRange(S.q.length, S.q.length); };
   if (keep?.f) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); }
   $$('.item', side).forEach((i) => {
@@ -228,9 +232,9 @@ async function togglePin(a) { try { await api('POST', `/agents/${a.id}/pin`, { p
 
 function renderPane() {
   const pane = $('#pane'); if (!pane) return; const a = byId(S.sel);
-  if (!a) { pane.innerHTML = `<div class="empty">${MARK}<h3>Pick an agent</h3><p class="small">Choose one on the left, or press <span class="kbd">Ctrl</span> <span class="kbd">N</span> for a new one.</p></div>`; return; }
+  if (!a) { pane.innerHTML = `<div class="empty">${MARK}<h3>Pick an agent</h3><p class="small">Choose one on the left, or press <span class="kbd">Ctrl</span> <span class="kbd">N</span> for a new one. Any agent can repeat by itself: open it and press Repeat.</p></div>`; return; }
   pane.innerHTML = `<div class="chat-head"><div class="grow"><h3 id="hname"></h3><div class="small muted" id="meta"></div></div>
-  <button class="ic ghost" id="hpin"></button><button class="ic ghost" id="edit" aria-label="Edit agent" title="Edit agent">${icon('edit')}</button><button class="ic ghost" id="clear" aria-label="Clear chat" title="Clear chat">${icon('trash')}</button></div>
+  <button class="ghost" id="hrep"></button><button class="ic ghost" id="hpin"></button><button class="ic ghost" id="edit" aria-label="Edit agent" title="Edit agent">${icon('edit')}</button><button class="ic ghost" id="clear" aria-label="Clear chat" title="Clear chat">${icon('trash')}</button></div>
   <div class="msgs" id="msgs"><div class="col" id="col"></div></div>
   <div class="composer"><div class="cbox"><textarea id="in" rows="1" placeholder="Message ${esc(a.spec.name)}" aria-label="Message"></textarea><button class="primary" id="send"></button></div></div>`;
   updateHead(); renderMsgs();
@@ -244,6 +248,7 @@ function renderPane() {
 function updateHead() {
   const a = byId(S.sel); if (!a || !$('#hname')) return;
   $('#hname').textContent = a.spec.name; $('#meta').textContent = `${modelName(a.spec.model)} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}`;
+  const r = repeatInfo(a), hb = $('#hrep'); hb.innerHTML = icon('repeat') + `<span>${r && r.on ? 'Repeating' : 'Repeat'}</span>`; hb.title = r ? r.text : 'Make this agent repeat by itself'; hb.setAttribute('aria-label', r ? 'Repeat settings: ' + r.text : 'Make this agent repeat'); hb.style.color = r && r.on ? 'var(--clay)' : ''; hb.onclick = () => repeatDialog(byId(a.id));
   const p = $('#hpin'); p.innerHTML = icon('pin'); p.setAttribute('aria-label', a.pinned ? 'Unpin' : 'Pin'); p.title = a.pinned ? 'Unpin' : 'Pin to top'; p.style.color = a.pinned ? 'var(--clay)' : ''; p.onclick = () => togglePin(byId(a.id));
   const run = a.status === 'running', b = $('#send'); if (b) { b.innerHTML = icon(run ? 'stop' : 'send'); b.setAttribute('aria-label', run ? 'Stop' : 'Send'); b.title = run ? 'Stop' : 'Send'; b.onclick = () => (run ? stopRun(a.id) : send(a.id)); }
   renderTyping();
@@ -349,6 +354,7 @@ function settingsView() {
   <div class="setrow"><span class="grow">Animations</span>${seg('s-motion', [['full', 'On'], ['reduced', 'Reduced']], cfg.motion)}</div></div>
   ${autoSettingsHtml()}
   <div class="card stack"><div class="label">Pop-ups on this computer</div><div class="setrow"><span class="grow">Show a pop-up for new results and messages while this window is in the background</span>${tog('s-notify', cfg.notify, 'Notify when an agent finishes')}</div></div>
+  <div class="card stack"><div class="label">Window</div><div class="setrow"><span class="grow">Use the normal system window frame (turn this on if typing or clicking ever misbehaves)</span>${tog('s-frame', !!S.framed, 'Use the system window frame')}</div></div>
   <div class="card stack"><div class="label">Updates</div>
   <div class="setrow"><span class="grow">This app: <b>${esc(u?.current || '…')}</b>${u?.ok ? (u.available ? ` · version <b>${esc(u.latest)}</b> is ready` : ' · up to date') : u ? ` · ${esc(u.error)}` : ''}</span>
   ${u?.available ? `<button class="primary sm" id="s-upd" ${S.updBusy ? 'disabled' : ''}>${u.canInstall ? 'Update now' : 'Open release page'}</button>` : ''}<button class="ghost sm" id="s-check">Check now</button></div>
@@ -366,6 +372,7 @@ function settingsView() {
   setSeg('s-colors', 'colors'); setSeg('s-mode', 'mode'); setSeg('s-motion', 'motion');
   $('#s-size').oninput = (e) => { cfg.textSize = +e.target.value; saveCfg(); applyTheme(); }; $('#s-size').onchange = settingsView;
   $('#s-notify').onclick = async () => { cfg.notify = !cfg.notify; if (cfg.notify && Notification.permission === 'default') await Notification.requestPermission(); saveCfg(); settingsView(); };
+  $('#s-frame').onclick = () => window.shell.setFrame(!S.framed);
   $('#s-auto').onclick = () => { cfg.autoUpdate = !cfg.autoUpdate; saveCfg(); settingsView(); };
   $('#s-check').onclick = () => checkUpdates(true);
   $('#s-upd')?.addEventListener('click', () => (S.upd.canInstall ? doUpdate() : window.shell.openExternal(S.upd.page)));
@@ -384,7 +391,7 @@ document.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); editor(null); }
   else if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); if (S.tab !== 'agents') go('agents'); $('#q')?.focus(); $('#q')?.select(); }
   else if (mod && e.key === ',') { e.preventDefault(); go('settings'); }
-  else if (e.altKey && ['1', '2', '3', '4', '5'].includes(e.key)) { e.preventDefault(); go(['agents', 'auto', 'activity', 'usage', 'settings'][+e.key - 1]); }
+  else if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); go(['agents', 'activity', 'usage', 'settings'][+e.key - 1]); }
   else if (e.key === 'Escape') { const d = $('.scrim'); if (d) d.remove(); else if (document.activeElement === $('#q') && S.q) { S.q = ''; renderSide(); } }
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) ctl?.abort(); });
@@ -403,3 +410,5 @@ if (conn) start(); else connectView();
 // While a dialog is open nothing on the page may act as a window drag area: on Linux a drag area under a dialog can swallow clicks and keys.
 new MutationObserver(() => document.documentElement.classList.toggle('modal', !!document.querySelector('.scrim'))).observe(document.body, { childList: true });
 window.addEventListener('focus', () => { const d = document.querySelector('.scrim input, .scrim textarea'); if (d && !document.activeElement?.matches('input, textarea, select')) d.focus(); });
+
+let jobsTimer; const refreshJobsSoon = () => { clearTimeout(jobsTimer); jobsTimer = setTimeout(refreshJobs, 300); };

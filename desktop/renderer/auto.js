@@ -8,7 +8,7 @@ const srvTz = () => (S.srv && S.srv.tz) || BROWSER_TZ;
 const timeAgo = (t) => { if (!t) return ''; const s = Math.max(0, Date.now() / 1000 - t); if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + ' min ago'; if (s < 86400) return new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); return new Date(t * 1000).toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
 // ---- data ----
-async function refreshJobs() { try { S.jobs = await api('GET', '/jobs'); } catch { /* shown as offline elsewhere */ } if (S.tab === 'auto') renderAuto(); }
+async function refreshJobs() { try { S.jobs = await api('GET', '/jobs'); } catch { /* shown as offline elsewhere */ } if (S.tab === 'agents') { renderSide(); updateHead(); } }
 async function refreshSettings() { try { S.srv = await api('GET', '/settings'); } catch {} if (S.tab === 'settings') settingsView(); }
 async function fetchActivity() {
   try {
@@ -50,90 +50,59 @@ function toSchedule(st) {
   }
 }
 
-// ---- automations view ----
-function autoView() {
-  view().innerHTML = '<div class="page"><div class="col fade" style="max-width:900px" id="autocol"></div></div>';
-  if (!S.jobs) refreshJobs(); renderAuto();
-}
-function renderAuto() {
-  const col = $('#autocol'); if (!col) return; const jobs = S.jobs || [], paused = S.paused;
-  const openIds = new Set($$('.job.open', col).map((e) => +e.dataset.id));
-  col.innerHTML = `<div class="head"><h1 class="grow">Automations</h1><button class="primary" id="newjob">${icon('plus')}New task</button></div>
-  <div class="card row ${paused ? 'warnbox' : ''}"><span class="grow">${paused ? '<b>Paused.</b> Nothing runs by itself until you turn it back on.' : 'Automations are running. Tasks start on time, even when this app is closed.'}</span>
-  <button class="toggle ${paused ? '' : 'on'}" id="pausebtn" role="switch" aria-checked="${!paused}" aria-label="Run automations"></button></div>
-  ${!S.jobs ? '<div class="empty"><p>Loading…</p></div>' : !jobs.length ? `<div class="empty">${icon('clock')}<h3>Nothing scheduled yet</h3><p class="small">A task is something an agent does by itself: every morning, every hour, or when a web link is called. It can message you when it is done.</p>
-  <p class="small">Or just tell an agent in chat: <span class="kbd">every weekday at 8:00 tell me the weather</span></p><button class="primary" id="newjob2">${icon('plus')}New task</button></div>` : jobs.map(jobCard).join('')}`;
-  const nj = () => jobEditor(null); $('#newjob').onclick = nj; $('#newjob2')?.addEventListener('click', nj);
-  $('#pausebtn').onclick = async () => { try { S.srv = await api('PUT', '/settings', { paused: !S.paused }); S.paused = S.srv.paused; renderAuto(); toast(S.paused ? 'Automations paused' : 'Automations running'); } catch (e) { toast(e.message); } };
-  $$('.job', col).forEach((el) => {
-    const id = +el.dataset.id, j = jobs.find((x) => x.id === id); if (!j) return;
-    if (openIds.has(id)) { el.classList.add('open'); fillHistory(el, j); }
-    $('.jtoggle', el).onclick = async (e) => { e.stopPropagation(); try { await api('POST', `/jobs/${id}/enabled`, { enabled: !j.enabled }); refreshJobs(); } catch (er) { toast(er.message); } };
-    $('.jrun', el).onclick = async (e) => { e.stopPropagation(); try { await api('POST', `/jobs/${id}/run`); toast('Started'); setTimeout(refreshJobs, 1500); } catch (er) { toast(er.message); } };
-    $('.jedit', el).onclick = (e) => { e.stopPropagation(); jobEditor(j); };
-    $('.jhead', el).onclick = () => { el.classList.toggle('open'); if (el.classList.contains('open')) fillHistory(el, j); };
-    $('.jhead', el).onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); } };
-    $('.jcopy', el)?.addEventListener('click', async (e) => { e.stopPropagation(); await navigator.clipboard.writeText(`${conn.url}/hook/${j.hook}`); toast('Link copied'); });
-  });
-}
-function jobCard(j) {
-  const st = j.running ? 'running' : !j.enabled ? 'off' : j.last_status === 'error' ? 'err' : j.last_status === 'ok' ? 'ok' : '';
-  const stateWord = j.running ? 'working' : !j.enabled ? 'off' : j.last_status === 'error' ? 'last run failed' : '';
-  return `<div class="card job" data-id="${j.id}"><div class="jhead" role="button" tabindex="0" aria-expanded="false"><span class="dot ${st}"></span><div class="grow"><div class="row"><h3 class="ellip" style="flex:0 1 auto">${esc(j.name)}</h3><span class="chip sm">${esc(j.agent)}</span>${stateWord ? `<span class="small muted">${stateWord}</span>` : ''}</div>
-  <div class="small muted">${esc(j.human)}${j.enabled && j.next ? ` · next ${esc(j.next)}` : ''}${j.last_run ? ` · last ${timeAgo(j.last_run)}` : ''}</div></div>
-  <button class="toggle jtoggle ${j.enabled ? 'on' : ''}" role="switch" aria-checked="${j.enabled}" aria-label="${esc(j.name)} on or off"></button></div>
-  <div class="jbody"><p class="small muted" style="white-space:pre-wrap">${esc(j.prompt)}</p>${j.last_text ? `<div class="label" style="margin-top:6px">Last result</div><p class="small selectable" style="white-space:pre-wrap">${md(j.last_text)}</p>` : ''}
-  ${j.hook ? `<div class="small muted">Web link: <span class="kbd selectable">/hook/${esc(j.hook.slice(0, 8))}…</span> <button class="link jcopy">Copy link</button></div>` : ''}
-  <div class="row wrap" style="margin-top:6px"><button class="ghost sm jrun">${icon('play')}Run now</button><button class="ghost sm jedit">${icon('edit')}Edit</button><span class="grow"></span><span class="small muted">${j.runs} run${j.runs === 1 ? '' : 's'} · $${j.cost.toFixed(3)}</span></div>
-  <div class="hist"></div></div></div>`;
-}
-async function fillHistory(el, j) {
-  try { const d = await api('GET', `/activity?job=${j.id}&limit=8`); const h = $('.hist', el); if (!h) return;
-    h.innerHTML = d.items.length ? `<div class="label" style="margin:8px 0 4px">History</div>` + d.items.map((e) => `<div class="small hrow"><span class="dot ${e.kind === 'error' ? 'err' : e.kind === 'run' ? 'ok' : ''}"></span><span class="muted">${timeAgo(e.at)}</span><span class="clamp selectable">${esc(e.body)}</span></div>`).join('') : ''; } catch {}
-}
+// ---- repeat: an agent that runs by itself ----
+const jobsOf = (id) => (S.jobs || []).filter((j) => j.agent_id === id);
+const repeatInfo = (agent) => { const l = jobsOf(agent.id), j = l.find((x) => x.enabled) || l[0]; if (!j) return null; return { job: j, text: j.enabled ? `${j.human}${j.next ? ' · next ' + j.next : ''}` : `${j.human} (off)`, on: j.enabled }; };
 
-function jobEditor(job) {
-  const agents = S.agents || []; if (!agents.length) { toast('Create an agent first.'); return; }
+function repeatDialog(agent, jobId) {
+  const all = jobsOf(agent.id);
+  const job = jobId === 0 ? null : (all.find((j) => j.id === jobId) || all.find((j) => j.enabled) || all[0] || null);
   const st = fromSchedule(job?.schedule);
-  const f = { name: job?.name || '', agent_id: job?.agent_id || (S.sel && byId(S.sel) ? S.sel : agents[0].id), prompt: job?.prompt || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
+  const f = { prompt: job?.prompt || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
   const d = document.createElement('div'); d.className = 'scrim';
   const types = [['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['every', 'Every…'], ['once', 'Once'], ['hook', 'Web link'], ['manual', 'Manual'], ['cron', 'Cron']];
   const draw = () => {
-    d.innerHTML = `<div class="dialog wide" role="dialog" aria-modal="true" aria-label="${job ? 'Edit task' : 'New task'}"><h2>${job ? 'Edit task' : 'New task'}</h2>
-    <div class="field"><label class="label" for="jn">Name</label><input id="jn" placeholder="Morning news" value="${esc(f.name)}"></div>
-    <div class="field"><label class="label" for="ja">Agent</label><select id="ja">${agents.map((a) => `<option value="${a.id}" ${a.id === f.agent_id ? 'selected' : ''}>${esc(a.spec.name)} · ${esc(modelName(a.spec.model))}</option>`).join('')}</select></div>
-    <div class="field"><label class="label" for="jp">What should it do?</label><textarea id="jp" placeholder="Check the news about my topics and give me the three most important things.">${esc(f.prompt)}</textarea></div>
+    d.innerHTML = `<div class="dialog wide" role="dialog" aria-modal="true" aria-label="Repeat ${esc(agent.spec.name)}"><h2>Repeat ${esc(agent.spec.name)}</h2>
+    <p class="tip" style="margin-top:-8px">The agent does this by itself on the server, even when this app is closed, and tells you the result.</p>
+    ${all.length > 1 || (all.length && !job) ? `<div class="row wrap">${all.map((j, n) => `<button class="chip ${job && j.id === job.id ? 'on' : ''}" data-pick="${j.id}">${esc(j.name === agent.spec.name ? 'Repeat ' + (n + 1) : j.name)}</button>`).join('')}<button class="chip ${!job ? 'on' : ''}" data-pick="0">+ Another</button></div>` : ''}
+    <div class="setrow"><span class="grow"><b>${f.enabled ? 'Repeating' : 'Not repeating'}</b></span><button class="toggle ${f.enabled ? 'on' : ''}" id="r-en" role="switch" aria-checked="${f.enabled}" aria-label="Repeating"></button></div>
+    <div class="field"><label class="label" for="jp">What should it do each time?</label><textarea id="jp" placeholder="Check the news about my topics and give me the three most important things.">${esc(f.prompt)}</textarea></div>
     <div class="field"><span class="label">When</span><div class="row wrap">${types.map(([v, l]) => `<button class="chip ${st.type === v ? 'on' : ''}" data-t="${v}" aria-pressed="${st.type === v}">${l}</button>`).join('')}</div>
     <div class="row wrap">${['daily', 'weekdays', 'weekends', 'weekly'].includes(st.type) ? `${st.type === 'weekly' ? `<select id="jd" style="width:auto">${DAYS.map((x, i) => `<option value="${i}" ${String(i) === st.dow ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}<span class="small muted">at</span><input id="jt" type="time" value="${st.time}" style="width:auto">` : ''}
     ${st.type === 'every' ? `<span class="small muted">every</span><input id="je" type="number" min="1" value="${st.every}" style="width:90px"><select id="ju" style="width:auto">${['minutes', 'hours', 'days'].map((u) => `<option ${u === st.unit ? 'selected' : ''}>${u}</option>`).join('')}</select>` : ''}
     ${st.type === 'once' ? `<input id="jo" type="datetime-local" value="${st.at}" style="width:auto">` : ''}
     ${st.type === 'cron' ? `<input id="jc" placeholder="0 8 * * 1-5" value="${esc(st.cron)}">` : ''}
-    ${st.type === 'hook' ? '<span class="small muted">You get a private web link. Anything that calls it (a phone shortcut, GitHub, another service) starts the task and hands its text to the agent.</span>' : ''}
+    ${st.type === 'hook' ? '<span class="small muted">You get a private web link. Anything that calls it (a phone shortcut, GitHub, another service) starts the agent and hands its text to it.</span>' : ''}
     ${st.type === 'manual' ? '<span class="small muted">It only runs when you press Run now.</span>' : ''}</div>
     ${['daily', 'weekdays', 'weekends', 'weekly', 'cron'].includes(st.type) ? `<span class="small muted">Times use ${esc(srvTz())}. Change it in Settings.</span>` : ''}</div>
     <div class="setrow"><span class="grow">Message me the result</span>${seg('j-notify', [['always', 'Always'], ['errors', 'If it fails'], ['never', 'Never']], f.notify)}</div>
-    <div class="setrow"><span class="grow">Session</span>${seg('j-fresh', [['1', 'Fresh each time'], ['0', 'Keep the chat']], f.fresh ? '1' : '0')}</div>
-    <p class="tip" style="margin-top:-6px">${f.fresh ? 'Fresh each time is cheaper: the agent does not carry old conversation along.' : 'The agent continues its own chat, so it remembers earlier runs but uses more tokens over time.'}</p>
+    <div class="setrow"><span class="grow">Memory between runs</span>${seg('j-fresh', [['1', 'Fresh each time'], ['0', 'Keep the chat']], f.fresh ? '1' : '0')}</div>
+    <p class="tip" style="margin-top:-6px">${f.fresh ? 'Fresh each time is cheaper: it does not carry old conversation along.' : 'It continues this agent\'s own chat, so it remembers earlier runs but uses more tokens over time.'}</p>
+    ${job && job.hook ? `<div class="small muted">Web link: <span class="kbd selectable">/hook/${esc(job.hook.slice(0, 8))}…</span> <button class="link" id="jcopy">Copy link</button></div>` : ''}
     <p id="e" class="err small" role="alert"></p>
-    <div class="row">${job ? '<button class="ghost" id="jdel">Delete</button>' : ''}<span class="grow"></span><button class="ghost" id="jcancel">Cancel</button><button class="primary" id="jsave">Save</button></div></div>`;
-    const keep = () => { f.name = $('#jn', d).value; f.agent_id = +$('#ja', d).value; f.prompt = $('#jp', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
+    <div class="row wrap">${job ? '<button class="ghost" id="jdel">Stop repeating</button><button class="ghost" id="jrun">Run now</button>' : ''}<span class="grow"></span><button class="ghost" id="jcancel">Cancel</button><button class="primary" id="jsave">Save</button></div></div>`;
+    const keep = () => { f.prompt = $('#jp', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
     $$('[data-t]', d).forEach((b) => (b.onclick = () => { keep(); st.type = b.dataset.t; draw(); }));
+    $$('[data-pick]', d).forEach((b) => (b.onclick = () => { d.remove(); repeatDialog(agent, +b.dataset.pick); }));
+    $('#r-en', d).onclick = () => { keep(); f.enabled = !f.enabled; draw(); };
     $$('#j-notify button', d).forEach((b) => (b.onclick = () => { keep(); f.notify = b.dataset.v; draw(); }));
     $$('#j-fresh button', d).forEach((b) => (b.onclick = () => { keep(); f.fresh = b.dataset.v === '1'; draw(); }));
     $('#jcancel', d).onclick = () => d.remove();
+    $('#jcopy', d)?.addEventListener('click', async () => { await navigator.clipboard.writeText(`${conn.url}/hook/${job.hook}`); toast('Link copied'); });
+    $('#jrun', d)?.addEventListener('click', async () => { try { await api('POST', `/jobs/${job.id}/run`); toast('Started'); d.remove(); } catch (e) { $('#e', d).textContent = e.message; } });
     $('#jsave', d).onclick = async () => {
       keep(); const err = (m) => { $('#e', d).textContent = m; };
-      if (!f.name.trim()) return err('Give the task a name.'); if (!f.prompt.trim()) return err('Say what it should do.');
+      if (!f.prompt.trim()) return err('Say what it should do each time.');
       let schedule; try { schedule = toSchedule(st); } catch (e) { return err(e.message); }
       $('#jsave', d).disabled = true;
-      try { const body = { agent_id: f.agent_id, name: f.name.trim(), prompt: f.prompt, schedule, enabled: f.enabled, fresh: f.fresh, notify: f.notify }; if (job) await api('PUT', `/jobs/${job.id}`, body); else await api('POST', '/jobs', body); d.remove(); toast('Saved'); refreshJobs(); }
+      try { const body = { agent_id: agent.id, name: job?.name || agent.spec.name, prompt: f.prompt, schedule, enabled: f.enabled, fresh: f.fresh, notify: f.notify }; if (job) await api('PUT', `/jobs/${job.id}`, body); else await api('POST', '/jobs', body); d.remove(); toast(f.enabled ? 'Repeating' : 'Saved'); refreshJobs(); }
       catch (e) { err(`Couldn't save: ${e.message}`); $('#jsave', d).disabled = false; }
     };
-    $('#jdel', d)?.addEventListener('click', () => { d.remove(); confirmBox(`Delete ${job.name}?`, 'The task stops and is removed. Its past results stay in Activity.', 'Delete', async () => { await api('DELETE', `/jobs/${job.id}`); refreshJobs(); }); });
-    $('#jn', d).focus();
+    $('#jdel', d)?.addEventListener('click', () => { d.remove(); confirmBox(`Stop repeating ${agent.spec.name}?`, 'It will no longer run by itself. Past results stay in Activity.', 'Stop repeating', async () => { await api('DELETE', `/jobs/${job.id}`); refreshJobs(); }); });
+    ($('#jp', d)).focus();
   };
   d.onclick = (e) => e.target === d && d.remove(); d.onkeydown = (e) => e.key === 'Escape' && d.remove();
-  draw(); document.body.appendChild(d); $('#jn', d)?.focus();
+  draw(); document.body.appendChild(d); $('#jp', d)?.focus();
 }
 
 // ---- activity view ----
@@ -159,8 +128,8 @@ function renderActivity() {
 function autoSettingsHtml() {
   const v = S.srv; if (!v) return '<div class="card"><p class="muted small">Loading server settings…</p></div>';
   const tg = v.telegram;
-  return `<div class="card stack"><div class="label">Automations</div>
-  <div class="setrow"><span class="grow">Run automations</span><button class="toggle ${v.paused ? '' : 'on'}" id="x-run" role="switch" aria-checked="${!v.paused}" aria-label="Run automations"></button></div>
+  return `<div class="card stack"><div class="label">Repeating agents</div>
+  <div class="setrow"><span class="grow">Let agents repeat by themselves</span><button class="toggle ${v.paused ? '' : 'on'}" id="x-run" role="switch" aria-checked="${!v.paused}" aria-label="Let agents repeat by themselves"></button></div>
   <div class="setrow"><span class="grow">At the same time, at most</span>${seg('x-par', [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']], String(v.max_parallel))}</div>
   <p class="tip" style="margin-top:-6px">Each run uses your Claude subscription. A lower number keeps usage calm.</p>
   <div class="setrow"><span class="grow">Time zone</span><input id="x-tz" list="x-tzl" value="${esc(v.tz)}" style="width:220px"><datalist id="x-tzl">${(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : []).map((z) => `<option>${z}</option>`).join('')}</datalist>${v.tz !== BROWSER_TZ ? `<button class="ghost sm" id="x-tzset">Use ${esc(BROWSER_TZ)}</button>` : ''}</div>

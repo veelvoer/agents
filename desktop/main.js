@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -7,6 +7,7 @@ const REPO = 'veelvoer/agents';
 app.setName('Agents');
 const stateFile = () => path.join(app.getPath('userData'), 'window.json');
 const loadState = () => { try { return JSON.parse(fs.readFileSync(stateFile(), 'utf8')); } catch { return {}; } };
+const saveState = (patch) => { try { fs.writeFileSync(stateFile(), JSON.stringify({ ...loadState(), ...patch })); } catch {} };
 let win = null;
 const send = (ch, ...a) => { if (win && !win.isDestroyed()) win.webContents.send(ch, ...a); };
 
@@ -57,16 +58,15 @@ function create() {
   const st = loadState();
   win = new BrowserWindow({
     width: st.width || 1100, height: st.height || 740, minWidth: 480, minHeight: 520,
-    title: 'Agents', frame: false, backgroundColor: '#1B1A19', show: false,
+    title: 'Agents', frame: !!st.frame, autoHideMenuBar: true, backgroundColor: '#1B1A19',
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
   });
-  Menu.setApplicationMenu(null);
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => { if (st.max) win.maximize(); win.show(); win.focus(); win.webContents.focus(); });
+  if (st.max) win.maximize();
+  win.on('close', () => { const b = win.getNormalBounds(); saveState({ width: b.width, height: b.height, max: win.isMaximized() }); });
   win.on('focus', () => win.webContents.focus());   // make sure the page gets the keyboard
-  win.on('close', () => { const b = win.getNormalBounds(); fs.writeFileSync(stateFile(), JSON.stringify({ width: b.width, height: b.height, max: win.isMaximized() })); });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.on('maximize', () => send('max', true));
   win.on('unmaximize', () => send('max', false));
@@ -76,6 +76,8 @@ ipcMain.on('win', (e, act) => {
   const w = BrowserWindow.fromWebContents(e.sender); if (!w) return;
   if (act === 'min') w.minimize(); else if (act === 'max') w.isMaximized() ? w.unmaximize() : w.maximize(); else if (act === 'close') w.close();
 });
+ipcMain.handle('frame-get', () => !!loadState().frame);
+ipcMain.handle('frame-set', (_e, on) => { saveState({ frame: !!on }); setTimeout(() => { app.relaunch(); app.exit(0); }, 200); });
 ipcMain.handle('theme', () => theme());
 ipcMain.handle('update-check', () => checkUpdate());
 ipcMain.handle('update-install', () => installUpdate());

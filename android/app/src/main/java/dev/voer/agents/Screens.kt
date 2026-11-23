@@ -118,7 +118,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     var paused by remember { mutableStateOf(false) }
     var actLast by remember { mutableLongStateOf(0L) }
     var rev by remember { mutableLongStateOf(0L) }
-    var jobEditing by remember { mutableStateOf<Pair<Job?, Boolean>?>(null) }
+    var repeatFor by remember { mutableStateOf<Long?>(null) }
     val state = remember { ctx.getSharedPreferences("state", Context.MODE_PRIVATE) }
     var seen by remember { mutableLongStateOf(state.getLong("seen", -1L)) }
     val scope = rememberCoroutineScope()
@@ -140,8 +140,9 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
         }
     }
     LaunchedEffect(actLast) { try { acts = withContext(Dispatchers.IO) { api.activity().second }; if (seen < 0) { seen = actLast; state.edit().putLong("seen", seen).apply() } } catch (_: ApiError) {} }
-    LaunchedEffect(tab, rev) { try { when (tab) { 1 -> jobs = withContext(Dispatchers.IO) { api.jobs() }; 4 -> srv = withContext(Dispatchers.IO) { api.settings() } } } catch (_: ApiError) {} }
-    LaunchedEffect(tab, actLast) { if (tab == 2 && actLast > 0) { delay(800); seen = actLast; state.edit().putLong("seen", seen).apply() } }
+    LaunchedEffect(rev) { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} }
+    LaunchedEffect(tab, rev) { try { if (tab == 3) srv = withContext(Dispatchers.IO) { api.settings() } } catch (_: ApiError) {} }
+    LaunchedEffect(tab, actLast) { if (tab == 1 && actLast > 0) { delay(800); seen = actLast; state.edit().putLong("seen", seen).apply() } }
     LaunchedEffect(prefs.notify) { if (prefs.notify) { Notifier.schedule(ctx); ListenService.start(ctx) } }
     suspend fun checkRelease(manual: Boolean) {
         try { release = withContext(Dispatchers.IO) { Updater.latest() }; relErr = ""; if (manual) dismissed = false }
@@ -167,8 +168,8 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     BackHandler(open != null) { open = null }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (current == null) NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-            listOf(Triple("Agents", L.Bot, 0), Triple("Tasks", L.Clock, 1), Triple("Activity", L.Bell, 2), Triple("Usage", L.Chart, 3), Triple("Settings", L.Sliders, 4)).forEach { (label, icon, i) ->
-                val n = if (i == 2) acts.count { it.id > seen && it.kind != "system" } else 0
+            listOf(Triple("Agents", L.Bot, 0), Triple("Activity", L.Bell, 1), Triple("Usage", L.Chart, 2), Triple("Settings", L.Sliders, 3)).forEach { (label, icon, i) ->
+                val n = if (i == 1) acts.count { it.id > seen && it.kind != "system" } else 0
                 NavigationBarItem(tab == i, { tab = i }, { BadgedBox({ if (n > 0) Badge { Text(if (n > 9) "9+" else n.toString()) } }) { Icon(icon, null) } }, label = { Text(label, maxLines = 1) },
                     colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = .12f), unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
             }
@@ -188,12 +189,11 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
             Box(Modifier.weight(1f)) {
                 AnimatedContent(current?.id ?: -1L, transitionSpec = { (if (motion) slideInHorizontally(tween(240)) { it / 8 } + fadeIn(tween(200)) else fadeIn(snap())) togetherWith (if (motion) fadeOut(tween(120)) else fadeOut(snap())) }, label = "page") { id ->
-                    if (id != -1L && current != null) ChatScreen(api, current, models, { open = null }, { editing = current to true }, { a -> scope.launch { try { withContext(Dispatchers.IO) { api.pin(a.id, !a.pinned) } } catch (_: ApiError) {} } })
+                    if (id != -1L && current != null) ChatScreen(api, current, models, repeatText((jobs ?: emptyList()).filter { it.agentId == current.id }), { open = null }, { editing = current to true }, { repeatFor = current.id }, { a -> scope.launch { try { withContext(Dispatchers.IO) { api.pin(a.id, !a.pinned) } } catch (_: ApiError) {} } })
                     else when (tab) {
-                        0 -> AgentsTab(agents, err, models, !(updateReady && !dismissed), { open = it }, { editing = null to true })
-                        1 -> TasksTab(jobs, err, paused, !(updateReady && !dismissed), api, { scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }, { p -> scope.launch { try { withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("paused", p)) }; paused = p } catch (_: ApiError) {} } }, { jobEditing = it to true })
-                        2 -> ActivityTab(acts, seen, err, !(updateReady && !dismissed))
-                        3 -> UsageTab(agents ?: emptyList(), err, models, !(updateReady && !dismissed))
+                        0 -> AgentsTab(agents, err, models, jobs ?: emptyList(), paused, !(updateReady && !dismissed), { open = it }, { editing = null to true }, { scope.launch { try { withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("paused", false)) }; paused = false } catch (_: ApiError) {} } })
+                        1 -> ActivityTab(acts, seen, err, !(updateReady && !dismissed))
+                        2 -> UsageTab(agents ?: emptyList(), err, models, !(updateReady && !dismissed))
                         else -> SettingsTab(api, prefs, onPrefs, err, appVersion, serverVersion, release, relErr, updateReady, updProgress != null, srv, { srv = it }, actLast, { scope.launch { checkRelease(true) } }, ::startUpdate,
                             { scope.launch { try { val to = withContext(Dispatchers.IO) { api.updateServer() }; relErr = "Updating the server to ${to.removePrefix("agents-server ")}…"; delay(6000); serverVersion = withContext(Dispatchers.IO) { api.health() }; relErr = "" } catch (e: ApiError) { relErr = e.message ?: "" } } }, onLogout)
                     }
@@ -201,7 +201,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
         }
     }
-    if (jobEditing != null) JobEditorSheet(jobEditing!!.first, agents ?: emptyList(), srv?.tz ?: java.util.TimeZone.getDefault().id, api, open, { jobEditing = null }, { jobEditing = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } })
+    repeatFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> RepeatSheet(ag, (jobs ?: emptyList()).filter { it.agentId == id }, srv?.tz ?: java.util.TimeZone.getDefault().id, api, { repeatFor = null }, { repeatFor = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) } }
     if (editing != null) {
         val a = editing!!.first
         EditorSheet(a, models, api, onClose = { editing = null }, onSaved = { id -> if (a == null) open = id; editing = null }, onDeleted = { open = null; editing = null })
@@ -209,7 +209,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
 }
 
 @Composable
-fun AgentsTab(agents: List<Agent>?, err: String, models: List<Pair<String, String>>, topInset: Boolean, onOpen: (Long) -> Unit, onNew: () -> Unit) {
+fun AgentsTab(agents: List<Agent>?, err: String, models: List<Pair<String, String>>, jobs: List<Job>, paused: Boolean, topInset: Boolean, onOpen: (Long) -> Unit, onNew: () -> Unit, onResume: () -> Unit) {
     var q by remember { mutableStateOf("") }
     val list = agents?.filter { q.isBlank() || (it.spec.name + " " + it.spec.model.modelName(models)).contains(q.trim(), true) }
     Column(Modifier.fillMaxSize().then(if (topInset) Modifier.statusBarsPadding() else Modifier)) {
@@ -219,6 +219,7 @@ fun AgentsTab(agents: List<Agent>?, err: String, models: List<Pair<String, Strin
         }
         if (!agents.isNullOrEmpty()) OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), placeholder = { Text("Search agents") }, leadingIcon = { Icon(L.Search, null, Modifier.size(20.dp)) }, singleLine = true, shape = CircleShape)
         if (err.isNotEmpty()) Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { StatusPill(err); Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+        if (paused) Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)) { Row(Modifier.padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("Repeating is paused.", Modifier.weight(1f)); TextButton(onResume, Modifier.heightIn(min = 48.dp)) { Text("Resume") } } }
         when {
             agents == null && err.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
             agents.isNullOrEmpty() -> Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) { Muted("No agents yet. Press New to create one.") }
@@ -226,16 +227,16 @@ fun AgentsTab(agents: List<Agent>?, err: String, models: List<Pair<String, Strin
             else -> LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val pinned = list.filter { it.pinned }; val rest = list.filter { !it.pinned }
                 if (pinned.isNotEmpty()) item { Label("Pinned") }
-                items(pinned, key = { it.id }) { AgentCard(it, models, onOpen) }
+                items(pinned, key = { it.id }) { AgentCard(it, models, repeatText(jobs.filter { j -> j.agentId == it.id }), onOpen) }
                 if (pinned.isNotEmpty() && rest.isNotEmpty()) item { Label("Agents") }
-                items(rest, key = { it.id }) { AgentCard(it, models, onOpen) }
+                items(rest, key = { it.id }) { AgentCard(it, models, repeatText(jobs.filter { j -> j.agentId == it.id }), onOpen) }
             }
         }
     }
 }
 
 @Composable
-private fun AgentCard(a: Agent, models: List<Pair<String, String>>, onOpen: (Long) -> Unit) {
+private fun AgentCard(a: Agent, models: List<Pair<String, String>>, repeat: String?, onOpen: (Long) -> Unit) {
     Card({ onOpen(a.id) }, shape = RoundedCornerShape(16.dp), colors = cardColors(), border = cardBorder()) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -246,6 +247,7 @@ private fun AgentCard(a: Agent, models: List<Pair<String, String>>, onOpen: (Lon
                 if (a.running) Text("working", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
             }
             Muted("${a.spec.model.modelName(models)} · ${fmtN(a.usage.tokens)} tokens · $${"%.3f".format(a.usage.cost)}" + if (a.lastActive > 0) " · ${ago(a.lastActive)}" else "")
+            if (repeat != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(L.Repeat, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary); Text(repeat, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }
@@ -264,7 +266,7 @@ fun md(t: String): AnnotatedString = buildAnnotatedString {
 }
 
 @Composable
-fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, onBack: () -> Unit, onEdit: () -> Unit, onPin: (Agent) -> Unit) {
+fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, repeat: String?, onBack: () -> Unit, onEdit: () -> Unit, onRepeat: () -> Unit, onPin: (Agent) -> Unit) {
     val scope = rememberCoroutineScope()
     val clip = LocalClipboardManager.current
     var msgs by remember { mutableStateOf<List<Msg>>(emptyList()) }
@@ -293,6 +295,7 @@ fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, onBac
                 Text(agent.spec.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Muted("${agent.spec.model.modelName(models)} · ${fmtN(agent.usage.tokens)} tokens · $${"%.3f".format(agent.usage.cost)}")
             }
+            IconBtn(L.Repeat, if (repeat != null) "Repeat settings: $repeat" else "Make this agent repeat", onRepeat, tint = if (repeat != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             IconBtn(L.Pin, if (agent.pinned) "Unpin" else "Pin to top", { onPin(agent) }, tint = if (agent.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             IconBtn(L.Edit, "Edit agent", onEdit); IconBtn(L.Trash, "Clear chat", { confirmClear = true })
         }

@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('shell', {
   win: (a) => ipcRenderer.send('win', a),
   onMax: (f) => on('max', f),
   theme: () => ipcRenderer.invoke('theme'),
+  getFrame: () => ipcRenderer.invoke('frame-get'),
+  setFrame: (on) => ipcRenderer.invoke('frame-set', on),
   onTheme: (f) => on('theme', f),
   version: () => ipcRenderer.invoke('version'),
   checkUpdate: () => ipcRenderer.invoke('update-check'),

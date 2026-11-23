@@ -3,7 +3,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path'), fs = require('fs');
 const { ipcMain } = require('electron');
 const { theme } = require('../theme');
-ipcMain.handle('theme', () => theme()); ipcMain.handle('version', () => '0.3.0'); ipcMain.handle('update-check', () => ({ ok: true, current: '0.3.0', latest: '0.3.0', available: false }));
+ipcMain.handle('theme', () => theme()); ipcMain.handle('frame-get', () => false); ipcMain.handle('version', () => '0.3.0'); ipcMain.handle('update-check', () => ({ ok: true, current: '0.3.0', latest: '0.3.0', available: false }));
 const [url, key, out, colors = 'clay', mode = 'dark'] = process.argv.slice(-5);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.whenReady().then(async () => {
@@ -19,10 +19,8 @@ app.whenReady().then(async () => {
   await shot('2-agents');
   await js(`document.querySelector('.item').click()`); await wait(900); await shot('3-chat');
   await js(`document.querySelector('#edit').click()`); await shot('4-editor');
-  await js(`document.querySelector('#cancel').click(); document.querySelector('[data-tab=auto]').click()`); await wait(900); await shot('5-auto');
-  await js(`document.querySelector('.jhead').click()`); await wait(700); await shot('6-auto-open');
-  await js(`document.querySelector('.jedit').click()`); await wait(400); await shot('7-job-editor');
-  await js(`document.querySelector('#jcancel').click(); document.querySelector('#newjob').click()`); await wait(300); await js(`document.querySelector('[data-t=weekly]').click()`); await wait(300); await shot('8-job-new');
+  await js(`document.querySelector('#cancel').click(); document.querySelector('#hrep').click()`); await wait(500); await shot('5-repeat');
+  await js(`document.querySelector('[data-t=weekly]').click()`); await wait(300); await shot('6-repeat-weekly');
   await js(`document.querySelector('#jcancel').click(); document.querySelector('[data-tab=activity]').click()`); await wait(900); await shot('9-activity');
   await js(`document.querySelector('[data-tab=usage]').click()`); await shot('10-usage');
   await js(`document.querySelector('[data-tab=settings]').click()`); await wait(900); await shot('11-settings');

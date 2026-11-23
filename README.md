@@ -6,6 +6,8 @@ Run Claude agents on your own server and watch them from your desktop and phone.
 - See every agent, whether it is working, and its tokens and cost.
 - Runs on **your Claude subscription**: the server drives the official `claude` CLI that you log in to once.
 - Small and fast: the server is one static Rust program (about 1 MB). The apps are Electron (Linux) and Kotlin (Android).
+- Any agent can **repeat by itself**: open it, press Repeat, and choose when (every day, weekdays, every N minutes, once, or by web link). It runs on the server even when your apps are closed and sends you the result. You can also just tell an agent "every morning at 8 tell me the weather".
+- Phone notifications come from the Android app itself, instantly. Telegram, ntfy and web hooks are optional extras.
 - Talk to your agents from Telegram too (optional).
 - Colours follow your computer (GTK/KDE/GNOME theme on Linux, Material You on Android), or use the warm clay colours. Light, dark, text size and reduced motion are in Settings.
 - Updates come from GitHub: the desktop app and the Android app check for new releases, and the server can update itself from Settings.

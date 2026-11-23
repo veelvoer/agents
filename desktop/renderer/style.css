@@ -99,3 +99,6 @@ select:focus{border-color:var(--clay)}
 html.modal *{-webkit-app-region:no-drag !important}
 html.modal .wc{-webkit-app-region:no-drag !important}
 input,textarea,select{-webkit-user-select:text !important;user-select:text !important}
+
+html.framed .wc{display:none}html.framed *{-webkit-app-region:no-drag !important}html.framed .head,html.framed .banner,html.framed .chat-head{padding-right:0}
+.repeatline{display:flex;align-items:center;gap:6px;color:var(--clay)}.repeatline.muted{color:var(--muted)}.repeatline svg{width:14px;height:14px}.chat-head #hrep{min-height:36px}

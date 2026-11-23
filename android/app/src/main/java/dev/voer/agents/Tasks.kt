@@ -71,90 +71,37 @@ fun toSchedule(st: SchedState, tz: String): JSONObject {
     }
 }
 
-// ---- tasks tab ----
-@Composable
-fun TasksTab(jobs: List<Job>?, err: String, paused: Boolean, topInset: Boolean, api: Api, onChanged: () -> Unit, onPause: (Boolean) -> Unit, onEdit: (Job?) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var open by remember { mutableStateOf<Long?>(null) }
-    var note by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().then(if (topInset) Modifier.statusBarsPadding() else Modifier)) {
-        Row(Modifier.padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Automations", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
-            Button({ onEdit(null) }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Icon(L.Plus, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("New") }
-        }
-        if (err.isNotEmpty()) Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) { StatusPill(err) }
-        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item {
-                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = if (paused) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else cardBorder()) {
-                    Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (paused) "Paused. Nothing runs by itself until you turn it back on." else "Running. Tasks start on time, even when this app is closed.", Modifier.weight(1f))
-                        Switch(!paused, { onPause(!it) })
-                    }
-                }
-            }
-            if (note.isNotEmpty()) item { Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-            if (jobs == null) item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) } }
-            else if (jobs.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Nothing scheduled yet", style = MaterialTheme.typography.titleMedium)
-                    Muted("A task is something an agent does by itself: every morning, every hour, or when a web link is called. It can message you when it is done.")
-                    Muted("Or just tell an agent in chat: \"every weekday at 8:00 tell me the weather\".")
-                }
-            }
-            items(jobs ?: emptyList(), key = { it.id }) { j ->
-                val isOpen = open == j.id
-                Card({ open = if (isOpen) null else j.id }, Modifier.animateContentSize(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = cardBorder()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            val c = when { j.running -> MaterialTheme.colorScheme.primary; !j.enabled -> MaterialTheme.colorScheme.outline.copy(alpha = .5f); j.lastStatus == "error" -> MaterialTheme.colorScheme.primary; j.lastStatus == "ok" -> Ok; else -> MaterialTheme.colorScheme.outline }
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(c))
-                            Column(Modifier.weight(1f)) {
-                                Text(j.name, fontWeight = FontWeight.SemiBold)
-                                Muted("${j.agent} · ${j.human}" + (if (j.enabled && j.next != null) " · next ${j.next}" else "") + (if (j.lastRun > 0) " · last ${ago(j.lastRun)}" else ""))
-                            }
-                            Switch(j.enabled, { on -> scope.launch { try { withContext(Dispatchers.IO) { api.jobEnabled(j.id, on) }; onChanged() } catch (e: ApiError) { note = e.message ?: "" } } })
-                        }
-                        if (isOpen) {
-                            Muted(j.prompt)
-                            if (j.lastText.isNotBlank()) { Label("Last result"); Text(j.lastText, style = MaterialTheme.typography.bodyMedium) }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedButton({ scope.launch { try { withContext(Dispatchers.IO) { api.runJob(j.id) }; note = ""; onChanged() } catch (e: ApiError) { note = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Run now") }
-                                OutlinedButton({ onEdit(j) }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Edit") }
-                                Spacer(Modifier.weight(1f))
-                                Muted("${j.runs} run${if (j.runs == 1) "" else "s"} · $${"%.3f".format(j.cost)}")
-                            }
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(8.dp)) }
-        }
-    }
-}
+// ---- repeat: an agent that runs by itself ----
+fun repeatText(jobs: List<Job>): String? { val j = jobs.firstOrNull { it.enabled } ?: jobs.firstOrNull() ?: return null; return if (j.enabled) j.human + (j.next?.let { " · next $it" } ?: "") else "${j.human} (off)" }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun JobEditorSheet(job: Job?, agents: List<Agent>, tz: String, api: Api, openAgent: Long?, onClose: () -> Unit, onSaved: () -> Unit) {
+fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: () -> Unit, onSaved: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf(job?.name ?: "") }
-    var agentId by remember { mutableLongStateOf(job?.agentId ?: openAgent ?: agents.firstOrNull()?.id ?: 0L) }
-    var prompt by remember { mutableStateOf(job?.prompt ?: "") }
-    val st = remember { mutableStateOf(fromSchedule(job?.schedule)) }
-    var notify by remember { mutableStateOf(job?.notify ?: "always") }
-    var fresh by remember { mutableStateOf(job?.fresh ?: true) }
+    var pick by remember { mutableStateOf(jobs.firstOrNull { it.enabled }?.id ?: jobs.firstOrNull()?.id ?: 0L) }   // 0 = a new repeat
+    val job = jobs.firstOrNull { it.id == pick }
+    var prompt by remember(pick) { mutableStateOf(job?.prompt ?: "") }
+    val st = remember(pick) { mutableStateOf(fromSchedule(job?.schedule)) }
+    var notify by remember(pick) { mutableStateOf(job?.notify ?: "always") }
+    var fresh by remember(pick) { mutableStateOf(job?.fresh ?: true) }
+    var enabled by remember(pick) { mutableStateOf(job?.enabled ?: true) }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
     fun upd(f: SchedState.() -> Unit) { val c = st.value.copy(); c.f(); st.value = c }
     val types = listOf("daily" to "Every day", "weekdays" to "Weekdays", "weekly" to "Weekly", "every" to "Every…", "once" to "Once", "hook" to "Web link", "manual" to "Manual", "cron" to "Cron")
+    val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = MaterialTheme.colorScheme.onPrimary)
     ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(if (job == null) "New task" else "Edit task", style = MaterialTheme.typography.headlineMedium)
-            OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("Name") }, placeholder = { Text("Morning news") }, singleLine = true, shape = RoundedCornerShape(12.dp))
-            Label("Agent")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { agents.forEach { a -> FilterChip(agentId == a.id, { agentId = a.id }, { Text(a.spec.name) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = MaterialTheme.colorScheme.onPrimary)) } }
-            OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("What should it do?") }, placeholder = { Text("Check the news about my topics and give me the three most important things.") }, minLines = 3, shape = RoundedCornerShape(12.dp))
+            Text("Repeat ${agent.spec.name}", style = MaterialTheme.typography.headlineMedium)
+            Muted("The agent does this by itself on the server, even when the app is closed, and tells you the result.")
+            if (jobs.size > 1 || (jobs.isNotEmpty() && pick == 0L)) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                jobs.forEachIndexed { n, j -> FilterChip(pick == j.id, { pick = j.id }, { Text(if (j.name == agent.spec.name) "Repeat ${n + 1}" else j.name) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors) }
+                FilterChip(pick == 0L, { pick = 0L }, { Text("+ Another") }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors)
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (enabled) "Repeating" else "Not repeating", Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Switch(enabled, { enabled = it }) }
+            OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("What should it do each time?") }, placeholder = { Text("Check the news about my topics and give me the three most important things.") }, minLines = 3, shape = RoundedCornerShape(12.dp))
             Label("When")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { types.forEach { (v, l) -> FilterChip(st.value.type == v, { upd { type = v } }, { Text(l) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = MaterialTheme.colorScheme.onPrimary)) } }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { types.forEach { (v, l) -> FilterChip(st.value.type == v, { upd { type = v } }, { Text(l) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors) } }
             val t = st.value.type
             if (t == "weekly") FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { DAYS.forEachIndexed { i, d -> FilterChip(st.value.dow == i, { upd { dow = i } }, { Text(d.take(3)) }, Modifier.heightIn(min = 48.dp), shape = CircleShape) } }
             if (t in listOf("daily", "weekdays", "weekly")) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { Muted("at"); OutlinedButton({ showTime = true }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("%02d:%02d".format(st.value.h, st.value.m)) }; Muted("Times use $tz") }
@@ -166,21 +113,23 @@ fun JobEditorSheet(job: Job?, agents: List<Agent>, tz: String, api: Api, openAge
                 }
             }
             if (t == "cron") OutlinedTextField(st.value.cron, { v -> upd { cron = v } }, Modifier.fillMaxWidth(), label = { Text("Cron, like 0 8 * * 1-5") }, singleLine = true, shape = RoundedCornerShape(12.dp))
-            if (t == "hook") Muted("You get a private web link. Anything that calls it (a phone shortcut, GitHub, another service) starts the task and hands its text to the agent.")
+            if (t == "hook") Muted("You get a private web link. Anything that calls it (a phone shortcut, GitHub, another service) starts the agent and hands its text to it.")
             if (t == "manual") Muted("It only runs when you press Run now.")
             Label("Message me the result"); Segmented(listOf("always" to "Always", "errors" to "If it fails", "never" to "Never"), notify) { notify = it }
-            Label("Session"); Segmented(listOf("1" to "Fresh each time", "0" to "Keep the chat"), if (fresh) "1" else "0") { fresh = it == "1" }
-            Muted(if (fresh) "Fresh each time is cheaper: the agent does not carry old conversation along." else "The agent continues its own chat, so it remembers earlier runs but uses more tokens over time.")
+            Label("Memory between runs"); Segmented(listOf("1" to "Fresh each time", "0" to "Keep the chat"), if (fresh) "1" else "0") { fresh = it == "1" }
+            Muted(if (fresh) "Fresh each time is cheaper: it does not carry old conversation along." else "It continues this agent's own chat, so it remembers earlier runs but uses more tokens over time.")
             if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-                if (job != null) TextButton({ confirmDelete = true }, Modifier.heightIn(min = 48.dp)) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                if (job != null) {
+                    TextButton({ confirmDelete = true }, Modifier.heightIn(min = 48.dp)) { Text("Stop repeating", color = MaterialTheme.colorScheme.error) }
+                    TextButton({ scope.launch { try { withContext(Dispatchers.IO) { api.runJob(job.id) }; onClose() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Run now") }
+                }
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Cancel") }
                 Button({
-                    if (name.isBlank()) { err = "Give the task a name."; return@Button }
-                    if (prompt.isBlank()) { err = "Say what it should do."; return@Button }
+                    if (prompt.isBlank()) { err = "Say what it should do each time."; return@Button }
                     val sched = try { toSchedule(st.value, tz) } catch (e: ApiError) { err = e.message ?: ""; return@Button }
                     busy = true
-                    scope.launch { try { withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agentId).put("name", name.trim()).put("prompt", prompt).put("schedule", sched).put("enabled", job?.enabled ?: true).put("fresh", fresh).put("notify", notify)) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
+                    scope.launch { try { withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agent.id).put("name", job?.name ?: agent.spec.name).put("prompt", prompt).put("schedule", sched).put("enabled", enabled).put("fresh", fresh).put("notify", notify)) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
                 }, Modifier.heightIn(min = 48.dp), enabled = !busy, shape = RoundedCornerShape(12.dp)) { Text(if (busy) "Saving…" else "Save") }
             }
         }
@@ -189,8 +138,8 @@ fun JobEditorSheet(job: Job?, agents: List<Agent>, tz: String, api: Api, openAge
         val ts = rememberTimePickerState(st.value.h, st.value.m, true)
         AlertDialog({ showTime = false }, confirmButton = { TextButton({ upd { h = ts.hour; m = ts.minute }; showTime = false }, Modifier.heightIn(min = 48.dp)) { Text("OK") } }, dismissButton = { TextButton({ showTime = false }, Modifier.heightIn(min = 48.dp)) { Text("Cancel") } }, text = { TimeInput(ts) })
     }
-    if (confirmDelete && job != null) AlertDialog({ confirmDelete = false }, title = { Text("Delete ${job.name}?") }, text = { Text("The task stops and is removed. Its past results stay in Activity.") },
-        confirmButton = { TextButton({ confirmDelete = false; scope.launch { try { withContext(Dispatchers.IO) { api.deleteJob(job.id) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+    if (confirmDelete && job != null) AlertDialog({ confirmDelete = false }, title = { Text("Stop repeating ${agent.spec.name}?") }, text = { Text("It will no longer run by itself. Past results stay in Activity.") },
+        confirmButton = { TextButton({ confirmDelete = false; scope.launch { try { withContext(Dispatchers.IO) { api.deleteJob(job.id) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Stop repeating", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton({ confirmDelete = false }, Modifier.heightIn(min = 48.dp)) { Text("Keep it") } })
 }
 
@@ -258,8 +207,8 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
     var ntfyS by remember(srv.ntfyServer) { mutableStateOf(srv.ntfyServer) }; var ntfyT by remember(srv.ntfyTopic) { mutableStateOf(srv.ntfyTopic) }
     var hook by remember { mutableStateOf("") }
     SectionCard {
-        Label("Automations")
-        Row(verticalAlignment = Alignment.CenterVertically) { Text("Run automations", Modifier.weight(1f)); Switch(!srv.paused, { put(JSONObject().put("paused", !it)) }) }
+        Label("Repeating agents")
+        Row(verticalAlignment = Alignment.CenterVertically) { Text("Let agents repeat by themselves", Modifier.weight(1f)); Switch(!srv.paused, { put(JSONObject().put("paused", !it)) }) }
         Text("At the same time, at most"); Segmented(listOf("1" to "1", "2" to "2", "3" to "3", "4" to "4"), srv.maxParallel.toString()) { put(JSONObject().put("max_parallel", it.toInt())) }
         Muted("Each run uses your Claude subscription. A lower number keeps usage calm.")
         OutlinedTextField(tz, { tz = it }, Modifier.fillMaxWidth(), label = { Text("Time zone") }, singleLine = true, shape = RoundedCornerShape(12.dp))

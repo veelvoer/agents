@@ -2,7 +2,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { theme } = require('../theme');
-ipcMain.handle('theme', () => theme()); ipcMain.handle('version', () => '0.4.0'); ipcMain.handle('update-check', () => ({ ok: true, current: '0.4.0', latest: '0.4.0', available: false }));
+ipcMain.handle('theme', () => theme()); ipcMain.handle('frame-get', () => false); ipcMain.handle('version', () => '0.4.0'); ipcMain.handle('update-check', () => ({ ok: true, current: '0.4.0', latest: '0.4.0', available: false }));
 const [url, key] = process.argv.slice(-2);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.whenReady().then(async () => {

@@ -10,6 +10,8 @@ const ICONS = {
   trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>', play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>', alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>', stop: '<rect width="12" height="12" x="6" y="6" rx="2"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -86,7 +88,7 @@ async function api(method, path, body, signal) {
 }
 
 // ---- state ----
-const S = { tab: 'agents', agents: null, rev: 0, err: '', models: [], sel: null, chat: {}, busy: new Set(), drafts: {}, q: '', health: null, upd: null, updBusy: false, prog: 0, prev: new Map() };
+const S = { jobs: null, acts: [], actLast: 0, seen: +(localStorage.getItem('seen') || 0), actFilter: 'all', srv: null, paused: false, tab: 'agents', agents: null, rev: 0, err: '', models: [], sel: null, chat: {}, busy: new Set(), drafts: {}, q: '', health: null, upd: null, updBusy: false, prog: 0, prev: new Map() };
 const root = $('#root');
 let ctl = null, running = false;
 
@@ -114,11 +116,11 @@ function connectView() {
 
 function mainShell() {
   const nav = (id, label, ic) => `<button class="${S.tab === id ? 'on' : ''}" data-tab="${id}" title="${label}" ${S.tab === id ? 'aria-current="page"' : ''}>${icon(ic)}<span class="lb">${label}</span></button>`;
-  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}<span class="lb">Agents</span></div>${nav('agents', 'Agents', 'bot')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav>
+  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}<span class="lb">Agents</span></div>${nav('agents', 'Agents', 'bot')}${nav('auto', 'Automations', 'clock')}${nav('activity', 'Activity', 'bell')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav>
   <main id="main"><div id="banner"></div><div id="view" style="flex:1;min-height:0;display:flex;flex-direction:column"></div></main></div>${controls()}`;
   bindControls();
   $$('[data-tab]', root).forEach((b) => (b.onclick = () => go(b.dataset.tab)));
-  renderBanner(); ({ agents: agentsView, usage: usageView, settings: settingsView })[S.tab]();
+  renderBanner(); updateBadge(); ({ agents: agentsView, auto: autoView, activity: activityView, usage: usageView, settings: settingsView })[S.tab]();
 }
 function go(tab) { S.tab = tab; mainShell(); }
 const view = () => $('#view');
@@ -154,7 +156,7 @@ async function loadList() {
     ctl = new AbortController();
     try {
       const d = await api('GET', `/agents?since=${S.rev}`, undefined, ctl.signal);
-      S.err = ''; if (d.rev !== S.rev || !S.agents) { S.rev = d.rev; S.agents = d.agents; onAgents(); } else renderStatus();
+      S.err = ''; S.paused = d.paused; if (d.rev !== S.rev || !S.agents) { S.rev = d.rev; S.agents = d.agents; if (d.act_last !== S.actLast) fetchActivity(); onAgents(); } else renderStatus();
     } catch (e) {
       if (e.name === 'AbortError') { if (!running) return; if (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', () => !document.hidden && r(), { once: true })); continue; }
       S.err = e.message; renderStatus(); S.rev = 0;
@@ -162,15 +164,15 @@ async function loadList() {
     }
   }
 }
-function renderStatus() { if (S.tab === 'agents') { const s = $('#side .pill-slot'); if (s) s.innerHTML = S.err ? statusPill() : ''; } else if (S.tab === 'usage' || S.tab === 'settings') { $$('.status-slot').forEach((e) => (e.innerHTML = statusPill())); } }
+function renderStatus() { if (S.tab === 'agents') { const s = $('#side .pill-slot'); if (s) s.innerHTML = S.err ? statusPill() : ''; } else if (['usage', 'settings', 'activity'].includes(S.tab)) { $$('.status-slot').forEach((e) => (e.innerHTML = statusPill())); } }
 function onAgents() {
   // finished work: refresh the open chat, and tell the user if the window is in the background
   for (const a of S.agents) {
     const p = S.prev.get(a.id);
-    if (p && (p.status !== a.status || p.messages !== a.messages)) { if (a.id === S.sel) syncMsgs(a.id); if (p.status === 'running' && a.status === 'idle' && cfg.notify && !document.hasFocus()) { try { new Notification(a.spec.name, { body: 'Finished working.' }); } catch {} } }
+    if (p && (p.status !== a.status || p.messages !== a.messages)) { if (a.id === S.sel) syncMsgs(a.id); if (p.status === 'running' && a.status === 'idle' && cfg.notify && !document.hasFocus()) { try { new Notification(a.spec.name, { body: 'Finished working.', tag: 'agent-' + a.id }); } catch {} } }
     S.prev.set(a.id, { status: a.status, messages: a.messages });
   }
-  if (S.tab === 'agents') { renderSide(); updateHead(); if (S.sel && !byId(S.sel)) { S.sel = null; renderPane(); } } else if (S.tab === 'usage') usageView();
+  if (S.tab === 'agents') { renderSide(); updateHead(); if (S.sel && !byId(S.sel)) { S.sel = null; renderPane(); } } else if (S.tab === 'usage') usageView(); else if (S.tab === 'auto') refreshJobs(); else if (S.tab === 'settings') refreshSettings();
 }
 async function syncMsgs(id, older) {
   try {
@@ -250,7 +252,7 @@ function renderMsgs(keepScroll) {
   const col = $('#col'); if (!col) return; const id = S.sel, c = S.chat[id] || { start: 0, list: [] }, box = $('#msgs'), prevH = box.scrollHeight;
   col.innerHTML = (c.start > 0 ? '<button class="ghost sm more" id="more">Load earlier messages</button>' : '') +
     (!c.list.length ? '<div class="empty"><p>Say something to start.</p></div>' : '') +
-    c.list.map((m, i) => `<div class="msg selectable ${m.role}" data-i="${i}" title="${m.at ? new Date(m.at * 1000).toLocaleString() : ''}">${m.role === 'assistant' ? md(m.text) : esc(m.text)}<button class="cp" aria-label="Copy" title="Copy">${icon('copy')}</button></div>`).join('') + '<div id="typing"></div>';
+    c.list.map((m, i) => m.role === 'auto' ? `<div class="autolabel small muted" data-i="${i}">${icon('clock')}<span>${esc(m.text)}</span><span>${m.at ? new Date(m.at * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</span></div>` : `<div class="msg selectable ${m.role}" data-i="${i}" title="${m.at ? new Date(m.at * 1000).toLocaleString() : ''}">${m.role === 'assistant' ? md(m.text) : esc(m.text)}<button class="cp" aria-label="Copy" title="Copy">${icon('copy')}</button></div>`).join('') + '<div id="typing"></div>';
   $$('.cp', col).forEach((b) => (b.onclick = async () => { await navigator.clipboard.writeText(c.list[+b.parentNode.dataset.i].text); toast('Copied'); }));
   $('#more')?.addEventListener('click', () => syncMsgs(id, true));
   renderTyping();
@@ -274,7 +276,7 @@ function confirmBox(title, text, ok, fn) {
 }
 
 function editor(a) {
-  const sp = a ? { ...a.spec, mcp_config: a.spec.mcp_config || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false };
+  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '' };
   const d = document.createElement('div'); d.className = 'scrim';
   const known = () => S.models.some((m) => m[0] === sp.model);
   const draw = () => {
@@ -285,14 +287,19 @@ function editor(a) {
     <div class="field"><label class="label" for="p">Instructions</label><textarea id="p" placeholder="What this agent is for and how it should answer">${esc(sp.prompt)}</textarea></div>
     <div class="field"><label class="label" for="mem">Memory</label><textarea id="mem" placeholder="Facts it should always remember">${esc(sp.memory)}</textarea></div>
     <div class="field"><label class="label" for="mcp">Tools (MCP file on the server)</label><input id="mcp" placeholder="/home/me/browser-mcp.json" value="${esc(sp.mcp_config)}"></div>
+    <div class="field"><span class="label">What it may do on the server</span>${seg('e-auto', [['safe', 'Look only'], ['standard', 'Edit files and browse'], ['full', 'Everything']], sp.autonomy)}<p class="tip">${{ safe: 'Reads files and answers. Nothing is changed.', standard: 'Can edit files in its folder and search the web.', full: 'Can run any command on the server without asking. Only for agents you trust.' }[sp.autonomy]}</p></div>
+    <div class="row" style="min-height:40px"><span class="grow">Agentic tools: message me, schedule tasks, remember, ask other agents</span><button class="toggle ${sp.os_tools ? 'on' : ''}" id="e-os" role="switch" aria-checked="${sp.os_tools}" aria-label="Agentic tools"></button></div>
+    <div class="row wrap"><div class="field grow"><label class="label" for="e-cap">Daily limit for automatic runs ($, optional)</label><input id="e-cap" type="number" min="0" step="0.5" value="${sp.daily_cap ?? ''}"></div><div class="field grow"><label class="label" for="e-wd">Working folder (optional)</label><input id="e-wd" placeholder="/home/me/projects/site" value="${esc(sp.workdir)}"></div></div>
     <div class="row" style="min-height:40px"><span class="grow">Can start subagents</span><button class="toggle ${sp.subagents ? 'on' : ''}" id="sub" role="switch" aria-checked="${sp.subagents}" aria-label="Can start subagents"></button></div>
     <p id="e" class="err small" role="alert"></p>
     <div class="row">${a ? '<button class="ghost" id="dup">Duplicate</button><button class="ghost" id="del">Delete</button>' : ''}<span class="grow"></span><button class="ghost" id="cancel">Cancel</button><button class="primary" id="save">Save</button></div></div>`;
-    const keep = () => { sp.name = $('#n', d).value; sp.prompt = $('#p', d).value; sp.memory = $('#mem', d).value; sp.mcp_config = $('#mcp', d).value; const cm = $('#cm', d).value.trim(); if (cm) sp.model = cm; };
+    const keep = () => { sp.name = $('#n', d).value; sp.prompt = $('#p', d).value; sp.memory = $('#mem', d).value; sp.mcp_config = $('#mcp', d).value; sp.daily_cap = $('#e-cap', d).value === '' ? null : +$('#e-cap', d).value; sp.workdir = $('#e-wd', d).value; const cm = $('#cm', d).value.trim(); if (cm) sp.model = cm; };
     $$('[data-m]', d).forEach((b) => (b.onclick = () => { keep(); sp.model = b.dataset.m; $('#cm', d) && ($('#cm', d).value = ''); draw(); }));
+    $$('#e-auto button', d).forEach((b) => (b.onclick = () => { keep(); sp.autonomy = b.dataset.v; draw(); }));
+    $('#e-os', d).onclick = () => { keep(); sp.os_tools = !sp.os_tools; draw(); };
     $('#sub', d).onclick = () => { keep(); sp.subagents = !sp.subagents; draw(); };
     $('#cancel', d).onclick = () => d.remove();
-    const body = () => ({ ...sp, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null });
+    const body = () => ({ ...sp, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null, workdir: sp.workdir.trim() || null });
     $('#save', d).onclick = async () => {
       keep(); if (!sp.name.trim()) { $('#e', d).textContent = 'Give the agent a name.'; return; }
       $('#save', d).disabled = true;
@@ -340,7 +347,8 @@ function settingsView() {
   ${cfg.colors === 'system' ? `<p class="tip">${p ? `Following ${esc(sys.source)} (${p.dark ? 'dark' : 'light'}). It changes with your theme.` : 'No theme colours found on this computer, so the warm clay colours are used.'} ${p ? `<span class="swatch"><i style="background:${p.vars['--bg']}"></i><i style="background:${p.vars['--card']}"></i><i style="background:${p.vars['--clay']}"></i></span>` : ''}</p>` : `<div class="setrow"><span class="grow">Light or dark</span>${seg('s-mode', [['system', 'Like my computer'], ['light', 'Light'], ['dark', 'Dark']], cfg.mode)}</div>`}
   <div class="setrow"><span class="grow">Text size</span><input type="range" id="s-size" min="13" max="19" step="1" value="${cfg.textSize}" aria-label="Text size"><span class="small muted" style="width:36px">${cfg.textSize}px</span></div>
   <div class="setrow"><span class="grow">Animations</span>${seg('s-motion', [['full', 'On'], ['reduced', 'Reduced']], cfg.motion)}</div></div>
-  <div class="card stack"><div class="label">Notifications</div><div class="setrow"><span class="grow">Tell me when an agent finishes while this window is in the background</span>${tog('s-notify', cfg.notify, 'Notify when an agent finishes')}</div></div>
+  ${autoSettingsHtml()}
+  <div class="card stack"><div class="label">Pop-ups on this computer</div><div class="setrow"><span class="grow">Show a pop-up for new results and messages while this window is in the background</span>${tog('s-notify', cfg.notify, 'Notify when an agent finishes')}</div></div>
   <div class="card stack"><div class="label">Updates</div>
   <div class="setrow"><span class="grow">This app: <b>${esc(u?.current || '…')}</b>${u?.ok ? (u.available ? ` · version <b>${esc(u.latest)}</b> is ready` : ' · up to date') : u ? ` · ${esc(u.error)}` : ''}</span>
   ${u?.available ? `<button class="primary sm" id="s-upd" ${S.updBusy ? 'disabled' : ''}>${u.canInstall ? 'Update now' : 'Open release page'}</button>` : ''}<button class="ghost sm" id="s-check">Check now</button></div>
@@ -363,6 +371,7 @@ function settingsView() {
   $('#s-upd')?.addEventListener('click', () => (S.upd.canInstall ? doUpdate() : window.shell.openExternal(S.upd.page)));
   $('#s-srv')?.addEventListener('click', () => confirmBox('Update the server?', 'The server restarts for a few seconds. Agents that are working at that moment stop.', 'Update', async () => { const r = await api('POST', '/admin/update'); toast(`Updating the server to ${r.to.replace('agents-server ', '')}…`); setTimeout(loadHealth, 6000); }));
   $('#s-out').onclick = () => { localStorage.removeItem('conn'); conn = null; running = false; ctl?.abort(); S.agents = null; S.rev = 0; connectView(); };
+  bindAutoSettings();
   $('#s-gh').onclick = (e) => { e.preventDefault(); window.shell.openExternal('https://github.com/veelvoer/agents'); };
 }
 const newerV = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
@@ -375,7 +384,7 @@ document.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); editor(null); }
   else if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); if (S.tab !== 'agents') go('agents'); $('#q')?.focus(); $('#q')?.select(); }
   else if (mod && e.key === ',') { e.preventDefault(); go('settings'); }
-  else if (e.altKey && ['1', '2', '3'].includes(e.key)) { e.preventDefault(); go(['agents', 'usage', 'settings'][+e.key - 1]); }
+  else if (e.altKey && ['1', '2', '3', '4', '5'].includes(e.key)) { e.preventDefault(); go(['agents', 'auto', 'activity', 'usage', 'settings'][+e.key - 1]); }
   else if (e.key === 'Escape') { const d = $('.scrim'); if (d) d.remove(); else if (document.activeElement === $('#q') && S.q) { S.q = ''; renderSide(); } }
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) ctl?.abort(); });
@@ -384,7 +393,8 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 async function start() {
   S.agents = null; S.err = ''; S.rev = 0;
   try { S.models = await api('GET', '/models'); } catch { S.models = []; }
-  mainShell(); running = true; loadList(); loadHealth();
+  mainShell(); running = true; loadList(); loadHealth(); refreshJobs(); fetchActivity();
+  api('GET', '/settings').then(async (v) => { S.srv = v; S.paused = v.paused; if (v.tz === 'UTC' && BROWSER_TZ !== 'UTC' && !localStorage.getItem('tzAsked')) { localStorage.setItem('tzAsked', '1'); try { S.srv = await api('PUT', '/settings', { tz: BROWSER_TZ }); toast(`Time zone set to ${BROWSER_TZ}. Change it in Settings.`); } catch {} } }).catch(() => {});
   window.shell.version().then((v) => { S.upd ||= { current: v }; });
   cfg.autoUpdate && checkUpdates(false); clearInterval(start.t); start.t = setInterval(() => cfg.autoUpdate && checkUpdates(false), 6 * 3600e3);
 }

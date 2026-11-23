@@ -19,8 +19,14 @@ app.whenReady().then(async () => {
   await shot('2-agents');
   await js(`document.querySelector('.item').click()`); await wait(900); await shot('3-chat');
   await js(`document.querySelector('#edit').click()`); await shot('4-editor');
-  await js(`document.querySelector('#cancel').click(); document.querySelector('[data-tab=usage]').click()`); await shot('5-usage');
-  await js(`document.querySelector('[data-tab=settings]').click()`); await wait(800); await shot('6-settings');
+  await js(`document.querySelector('#cancel').click(); document.querySelector('[data-tab=auto]').click()`); await wait(900); await shot('5-auto');
+  await js(`document.querySelector('.jhead').click()`); await wait(700); await shot('6-auto-open');
+  await js(`document.querySelector('.jedit').click()`); await wait(400); await shot('7-job-editor');
+  await js(`document.querySelector('#jcancel').click(); document.querySelector('#newjob').click()`); await wait(300); await js(`document.querySelector('[data-t=weekly]').click()`); await wait(300); await shot('8-job-new');
+  await js(`document.querySelector('#jcancel').click(); document.querySelector('[data-tab=activity]').click()`); await wait(900); await shot('9-activity');
+  await js(`document.querySelector('[data-tab=usage]').click()`); await shot('10-usage');
+  await js(`document.querySelector('[data-tab=settings]').click()`); await wait(900); await shot('11-settings');
+  await js(`document.querySelector('.page').scrollTop = 560`); await wait(300); await shot('12-settings2');
   console.log('console errors:', JSON.stringify(log));
   app.quit();
 });

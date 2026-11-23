@@ -1,0 +1,46 @@
+{
+  "name": "agents-desktop",
+  "productName": "Agents",
+  "version": "0.2.0",
+  "description": "Run and watch your Claude agents",
+  "main": "main.js",
+  "private": true,
+  "author": {
+    "name": "veelvoer",
+    "url": "https://github.com/veelvoer"
+  },
+  "homepage": "https://github.com/veelvoer/agents",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "dev.voer.agents",
+    "productName": "Agents",
+    "executableName": "agents",
+    "directories": {
+      "output": "artifacts"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "artifactName": "Agents-${version}-linux-${arch}.${ext}",
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "assets/icon.png",
+      "syncDesktopName": true
+    }
+  },
+  "desktopName": "agents.desktop"
+}

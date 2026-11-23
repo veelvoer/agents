@@ -1,0 +1,6 @@
+target/
+node_modules/
+artifacts/
+*.log
+.env
+agents.json

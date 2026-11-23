@@ -27,7 +27,13 @@ command -v systemctl >/dev/null || die "This installer needs systemd."
 case "$(uname -m)" in x86_64|amd64) ARCH=x86_64;; aarch64|arm64) ARCH=aarch64;; *) die "Unsupported processor: $(uname -m)";; esac
 
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
-can_sudo() { [ "$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; }
+can_sudo() {   # root, passwordless sudo, or sudo with a password typed on the terminal
+  [ "$(id -u)" -eq 0 ] && return 0
+  command -v sudo >/dev/null || return 1
+  sudo -n true 2>/dev/null && return 0
+  if (: </dev/tty) 2>/dev/null; then echo "  I need your password once to set up HTTPS (sudo)." >&2; sudo -v </dev/tty 2>/dev/null && return 0; fi
+  return 1
+}
 if [ "$(id -u)" -eq 0 ]; then
   BIN=/usr/local/bin/agents-server; UNIT=/etc/systemd/system/agents-server.service; SC="systemctl"; WANTED=multi-user.target
   CFG=/etc/agents; ENVF="$CFG/env"

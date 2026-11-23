@@ -7,6 +7,9 @@ Run Claude agents on your own server and watch them from your desktop and phone.
 - Runs on **your Claude subscription**: the server drives the official `claude` CLI that you log in to once.
 - Small and fast: the server is one static Rust program (about 1 MB). The apps are Electron (Linux) and Kotlin (Android).
 - Talk to your agents from Telegram too (optional).
+- Colours follow your computer (GTK/KDE/GNOME theme on Linux, Material You on Android), or use the warm clay colours. Light, dark, text size and reduced motion are in Settings.
+- Updates come from GitHub: the desktop app and the Android app check for new releases, and the server can update itself from Settings.
+- Built to stay fast over time: chats are stored one file per agent and read in pages, the apps wait on the server instead of polling, and answers survive a phone going to sleep.
 
 ## 1. Set up the server
 
@@ -20,7 +23,7 @@ It installs the server as a service, makes a secret key, and sets up HTTPS (a fr
 
 Then log in to Claude on the server once: install Claude Code and run `claude`.
 
-Options: `bash -s -- --domain agents.example.com`, `--no-https`, `--uninstall`. Run the command again to update; your key and agents are kept.
+Options: `bash -s -- --domain agents.example.com`, `--no-https`, `--uninstall`. Later, the apps can update the server for you from Settings. Run the command again to update; your key and agents are kept.
 
 ## 2. Install the apps
 

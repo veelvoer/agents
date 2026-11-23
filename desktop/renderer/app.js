@@ -68,8 +68,8 @@ const controls = () => `<div class="wc"><button class="ic" data-w="min" aria-lab
 function bindControls() { root.querySelectorAll('[data-w]').forEach((b) => (b.onclick = () => window.shell.win(b.dataset.w))); }
 
 function mainShell() {
-  const nav = (id, label, ic) => `<button class="${S.tab === id ? 'on' : ''}" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ''}>${icon(ic)}${label}</button>`;
-  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}Agents</div>${nav('agents', 'Agents', 'bot')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav><main id="main"></main></div>${controls()}`;
+  const nav = (id, label, ic) => `<button class="${S.tab === id ? 'on' : ''}" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ''}>${icon(ic)}<span class="lb">${label}</span></button>`;
+  root.innerHTML = `<div id="app"><nav id="nav"><div class="brand">${MARK}<span class="lb">Agents</span></div>${nav('agents', 'Agents', 'bot')}${nav('usage', 'Usage', 'chart')}<div class="sp"></div>${nav('settings', 'Settings', 'set')}</nav><main id="main"></main></div>${controls()}`;
   bindControls();
   root.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; mainShell(); }));
   ({ agents: agentsView, usage: usageView, settings: settingsView })[S.tab]();

@@ -9,7 +9,7 @@ const loadState = () => { try { return JSON.parse(fs.readFileSync(stateFile(), '
 function create() {
   const st = loadState();
   const win = new BrowserWindow({
-    width: st.width || 1100, height: st.height || 740, minWidth: 820, minHeight: 560,
+    width: st.width || 1100, height: st.height || 740, minWidth: 480, minHeight: 520,
     title: 'Agents', frame: false, backgroundColor: '#1B1A19', show: false,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },

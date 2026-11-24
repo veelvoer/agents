@@ -313,7 +313,7 @@ function editor(a) {
     $('#save', d).onclick = async () => {
       keep(); if (!sp.name.trim()) { $('#e', d).textContent = 'Give the agent a name.'; return; }
       $('#save', d).disabled = true;
-      try { if (a) await api('PUT', `/agents/${a.id}`, body()); else S.sel = await api('POST', '/agents', body()); d.remove(); if (S.tab === 'agents') renderPane(); }
+      try { let id = a ? a.id : 0; if (a) await api('PUT', `/agents/${a.id}`, body()); else { id = await api('POST', '/agents', body()); S.sel = id; } d.remove(); if (S.tab === 'agents') renderPane(); setTimeout(() => offerRepeat({ id, spec: body() }), 300); }
       catch (e) { $('#e', d).textContent = `Couldn't save: ${e.message}. Try again.`; $('#save', d).disabled = false; }
     };
     $('#dup', d)?.addEventListener('click', async () => { keep(); try { S.sel = await api('POST', '/agents', { ...body(), name: sp.name.trim() + ' copy' }); d.remove(); renderPane(); toast('Duplicated'); } catch (e) { $('#e', d).textContent = e.message; } });

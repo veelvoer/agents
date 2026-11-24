@@ -58,7 +58,7 @@ function repeatDialog(agent, jobId) {
   const all = jobsOf(agent.id);
   const job = jobId === 0 ? null : (all.find((j) => j.id === jobId) || all.find((j) => j.enabled) || all[0] || null);
   const st = fromSchedule(job?.schedule);
-  const f = { prompt: job?.prompt || '', notes: job?.notes || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
+  const f = { whenText: '', parsed: null, parsedFor: '', prompt: job?.prompt || '', notes: job?.notes || '', notify: job?.notify || 'always', fresh: job ? job.fresh : true, enabled: job ? job.enabled : true };
   const d = document.createElement('div'); d.className = 'scrim';
   const types = [['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['every', 'Every…'], ['once', 'Once'], ['hook', 'Web link'], ['manual', 'Manual'], ['cron', 'Cron']];
   const draw = () => {
@@ -68,7 +68,11 @@ function repeatDialog(agent, jobId) {
     <div class="setrow"><span class="grow"><b>${f.enabled ? 'Repeating' : 'Not repeating'}</b></span><button class="toggle ${f.enabled ? 'on' : ''}" id="r-en" role="switch" aria-checked="${f.enabled}" aria-label="Repeating"></button></div>
     <div class="field"><label class="label" for="jp">Message to send each time (optional)</label><textarea id="jp" placeholder="${agent.spec.prompt.trim() ? 'Leave empty: the agent just follows its own instructions.' : 'For example: Check the news about my topics and give me the three most important things.'}">${esc(f.prompt)}</textarea>
     <p class="tip">${agent.spec.prompt.trim() ? 'This agent already has instructions, so you can leave this empty and only choose when.' : 'This agent has no instructions yet, so say here what it should do each time.'}</p></div>
-    <div class="field"><span class="label">When</span><div class="row wrap">${types.map(([v, l]) => `<button class="chip ${st.type === v ? 'on' : ''}" data-t="${v}" aria-pressed="${st.type === v}">${l}</button>`).join('')}</div>
+    <div class="field"><label class="label" for="jw">When: say it in your own words</label>
+      <textarea id="jw" style="min-height:64px" placeholder="For example: every Monday and Thursday at 7:30, and on the 1st of each month at 9. Or: weekdays at 8:15, but not in August.">${esc(f.whenText)}</textarea>
+      <div class="row wrap"><button class="ghost sm" id="jw-go">Understand</button>${agent.spec.prompt.trim() && TIMING_WORDS.test(agent.spec.prompt) ? '<button class="link" id="jw-ins">Read it from the agent\'s instructions</button>' : ''}${job ? `<span class="small muted">Now: ${esc(job.human)}</span>` : ''}</div>
+      ${f.parsed ? `<div class="card" style="padding:10px 14px"><div class="small"><b>Understood:</b> ${esc(f.parsed.human)}</div><div class="small muted">Next: ${f.parsed.next.map(esc).join(' · ')} <span>(${esc(f.parsed.tz)})</span></div></div>` : ''}</div>
+    <div class="field"><span class="label">${f.parsed ? 'Or pick' : 'Or pick quickly'}</span><div class="row wrap">${types.map(([v, l]) => `<button class="chip ${st.type === v && !f.parsed ? 'on' : ''}" data-t="${v}" aria-pressed="${st.type === v && !f.parsed}">${l}</button>`).join('')}</div>
     <div class="row wrap">${['daily', 'weekdays', 'weekends', 'weekly'].includes(st.type) ? `${st.type === 'weekly' ? `<select id="jd" style="width:auto">${DAYS.map((x, i) => `<option value="${i}" ${String(i) === st.dow ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}<span class="small muted">at</span><input id="jt" type="time" value="${st.time}" style="width:auto">` : ''}
     ${st.type === 'every' ? `<span class="small muted">every</span><input id="je" type="number" min="1" value="${st.every}" style="width:90px"><select id="ju" style="width:auto">${['minutes', 'hours', 'days'].map((u) => `<option ${u === st.unit ? 'selected' : ''}>${u}</option>`).join('')}</select>` : ''}
     ${st.type === 'once' ? `<input id="jo" type="datetime-local" value="${st.at}" style="width:auto">` : ''}
@@ -83,8 +87,11 @@ function repeatDialog(agent, jobId) {
     ${job && job.hook ? `<div class="small muted">Web link: <span class="kbd selectable">/hook/${esc(job.hook.slice(0, 8))}…</span> <button class="link" id="jcopy">Copy link</button></div>` : ''}
     <p id="e" class="err small" role="alert"></p>
     <div class="row wrap">${job ? '<button class="ghost" id="jdel">Stop repeating</button><button class="ghost" id="jrun">Run now</button>' : ''}<span class="grow"></span><button class="ghost" id="jcancel">Cancel</button><button class="primary" id="jsave">Save</button></div></div>`;
-    const keep = () => { f.prompt = $('#jp', d).value; if ($('#jn', d)) f.notes = $('#jn', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
-    $$('[data-t]', d).forEach((b) => (b.onclick = () => { keep(); st.type = b.dataset.t; draw(); }));
+    const keep = () => { f.whenText = $('#jw', d).value; if (f.parsed && f.parsedFor !== f.whenText.trim()) f.parsed = null; f.prompt = $('#jp', d).value; if ($('#jn', d)) f.notes = $('#jn', d).value; if ($('#jt', d)) st.time = $('#jt', d).value; if ($('#jd', d)) st.dow = $('#jd', d).value; if ($('#je', d)) { st.every = +$('#je', d).value; st.unit = $('#ju', d).value; } if ($('#jo', d)) st.at = $('#jo', d).value; if ($('#jc', d)) st.cron = $('#jc', d).value; };
+    $$('[data-t]', d).forEach((b) => (b.onclick = () => { keep(); st.type = b.dataset.t; f.parsed = null; f.whenText = ''; draw(); }));
+    const understand = async (text) => { const e = $('#e', d); e.textContent = ''; const b = $('#jw-go', d); b.disabled = true; b.textContent = 'Reading…'; try { f.parsed = await api('POST', '/schedule/parse', { text }); f.parsedFor = f.whenText.trim(); } catch (er) { f.parsed = null; draw(); $('#e', d).textContent = er.message; return; } draw(); };
+    $('#jw-go', d).onclick = () => { keep(); if (!f.whenText.trim()) { $('#e', d).textContent = 'Write when it should run, for example: every Monday and Thursday at 7:30.'; return; } understand(f.whenText); };
+    $('#jw-ins', d)?.addEventListener('click', () => { keep(); f.whenText = agent.spec.prompt; understand(agent.spec.prompt); });
     $$('[data-pick]', d).forEach((b) => (b.onclick = () => { d.remove(); repeatDialog(agent, +b.dataset.pick); }));
     $('#r-en', d).onclick = () => { keep(); f.enabled = !f.enabled; draw(); };
     $$('#j-notify button', d).forEach((b) => (b.onclick = () => { keep(); f.notify = b.dataset.v; draw(); }));
@@ -95,7 +102,10 @@ function repeatDialog(agent, jobId) {
     $('#jsave', d).onclick = async () => {
       keep(); const err = (m) => { $('#e', d).textContent = m; };
       if (!f.prompt.trim() && !agent.spec.prompt.trim()) return err('Say what it should do each time, or give the agent instructions first.');
-      let schedule; try { schedule = toSchedule(st); } catch (e) { return err(e.message); }
+      let schedule;
+      if (f.parsed && f.parsedFor === f.whenText.trim()) schedule = f.parsed.schedule;
+      else if (f.whenText.trim()) { $('#jsave', d).disabled = true; $('#jsave', d).textContent = 'Reading…'; try { schedule = (await api('POST', '/schedule/parse', { text: f.whenText })).schedule; } catch (e) { $('#jsave', d).disabled = false; $('#jsave', d).textContent = 'Save'; return err(e.message); } }
+      else { try { schedule = toSchedule(st); } catch (e) { return err(e.message); } }
       $('#jsave', d).disabled = true;
       try { const body = { agent_id: agent.id, name: job?.name || agent.spec.name, prompt: f.prompt, schedule, enabled: f.enabled, fresh: f.fresh, notify: f.notify }; if (job) body.notes = f.notes; if (job) await api('PUT', `/jobs/${job.id}`, body); else await api('POST', '/jobs', body); d.remove(); toast(f.enabled ? 'Repeating' : 'Saved'); refreshJobs(); }
       catch (e) { err(`Couldn't save: ${e.message}`); $('#jsave', d).disabled = false; }
@@ -105,6 +115,24 @@ function repeatDialog(agent, jobId) {
   };
   d.onclick = (e) => { if (e.target === d) d.remove(); }; d.onkeydown = (e) => { if (e.key === 'Escape') d.remove(); };
   draw(); document.body.appendChild(d); $('#jp', d)?.focus();
+}
+
+
+// After saving an agent whose instructions mention timing: offer to make it repeat, reading the timing from those instructions.
+async function offerRepeat(agent) {
+  if (agent.spec.autonomous || !TIMING_WORDS.test(agent.spec.prompt) || jobsOf(agent.id).length) return;
+  const d = document.createElement('div'); d.className = 'scrim';
+  d.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="Make it repeat"><h3>Make ${esc(agent.spec.name)} repeat?</h3><p class="muted small">The instructions mention timing. I can read it and set up the repeat for you.</p><p id="o-res" class="small"></p><p id="e" class="err small" role="alert"></p><div class="row" style="justify-content:flex-end"><button class="ghost" id="o-no">No thanks</button><button class="primary" id="o-yes">Read the timing</button></div></div>`;
+  d.onclick = (e) => { if (e.target === d) d.remove(); }; d.onkeydown = (e) => { if (e.key === 'Escape') d.remove(); };
+  document.body.appendChild(d); $('#o-no', d).onclick = () => d.remove(); $('#o-yes', d).focus();
+  let parsed = null;
+  $('#o-yes', d).onclick = async () => {
+    const b = $('#o-yes', d);
+    if (!parsed) { b.disabled = true; b.textContent = 'Reading…'; try { parsed = await api('POST', '/schedule/parse', { text: agent.spec.prompt }); } catch (e) { $('#e', d).textContent = e.message + ' You can set it up with the Repeat button instead.'; b.disabled = false; b.textContent = 'Read the timing'; return; }
+      $('#o-res', d).innerHTML = `<b>Understood:</b> ${esc(parsed.human)}<br><span class="muted">Next: ${parsed.next.slice(0, 4).map(esc).join(' · ')}</span>`; b.disabled = false; b.textContent = 'Start repeating'; return; }
+    b.disabled = true;
+    try { await api('POST', '/jobs', { agent_id: agent.id, name: agent.spec.name, prompt: '', schedule: parsed.schedule, notify: 'always', fresh: true }); d.remove(); toast('Repeating'); refreshJobs(); } catch (e) { $('#e', d).textContent = e.message; b.disabled = false; }
+  };
 }
 
 // ---- life: an agent that lives on its own ----

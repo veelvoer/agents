@@ -35,7 +35,7 @@ fn base_tools() -> Value {
             "name": {"type": "string", "description": "Short name"},
             "prompt": {"type": "string", "description": "Exactly what to do each time. It runs without this conversation, so include everything needed. Leave empty to follow the agent's own instructions."},
             "notes": {"type": "string", "description": "Optional plan for a series that builds on earlier runs (for example a lesson plan). The job reads and updates these notes on every run."},
-            "when": {"type": "string", "description": "One of: 'daily 08:00', 'weekdays 08:30', 'weekly monday 09:00', 'every 30 minutes', 'every 2 hours', 'in 45 minutes', 'at 2026-12-01 09:00', or 'cron 0 8 * * *'. Times are in the user's time zone."},
+            "when": {"type": "string", "description": "One of: 'daily 08:00', 'every 30 minutes', 'in 45 minutes', 'at 2026-12-01 09:00', 'cron 0 8 * * *', or ANY plain description, even a detailed one like 'every Monday and Thursday at 7:30 and on the first day of each month at 9, but not in August'. Times are in the user's time zone."},
             "notify": {"type": "string", "enum": ["always", "errors", "never"], "description": "Send the result to the user (default always)"}},
           "required": ["name", "when"]}},
         {"name": "save_task_notes", "description": "Only during a scheduled run: save short notes for the next run of this same job (what you have covered so far and what comes next). Use it for series such as lessons or tracking, so you never repeat yourself. Replaces the old notes. Under 1500 characters.",

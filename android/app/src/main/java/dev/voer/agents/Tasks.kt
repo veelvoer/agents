@@ -82,6 +82,10 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
     val job = jobs.firstOrNull { it.id == pick }
     var prompt by remember(pick) { mutableStateOf(job?.prompt ?: "") }
     var notes by remember(pick) { mutableStateOf(job?.notes ?: "") }
+    var whenText by remember(pick) { mutableStateOf("") }
+    var parsed by remember(pick) { mutableStateOf<Parsed?>(null) }
+    var parsedFor by remember(pick) { mutableStateOf("") }
+    var reading by remember { mutableStateOf(false) }
     val st = remember(pick) { mutableStateOf(fromSchedule(job?.schedule)) }
     var notify by remember(pick) { mutableStateOf(job?.notify ?: "always") }
     var fresh by remember(pick) { mutableStateOf(job?.fresh ?: true) }
@@ -102,8 +106,17 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (enabled) "Repeating" else "Not repeating", Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Switch(enabled, { enabled = it }) }
             OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("Message to send each time (optional)") }, placeholder = { Text(if (agent.spec.prompt.isNotBlank()) "Leave empty: the agent just follows its own instructions." else "For example: Check the news about my topics and give me the three most important things.") }, minLines = 3, shape = RoundedCornerShape(12.dp))
             Muted(if (agent.spec.prompt.isNotBlank()) "This agent already has instructions, so you can leave this empty and only choose when." else "This agent has no instructions yet, so say here what it should do each time.")
-            Label("When")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { types.forEach { (v, l) -> FilterChip(st.value.type == v, { upd { type = v } }, { Text(l) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors) } }
+            Label("When: say it in your own words")
+            OutlinedTextField(whenText, { whenText = it; if (parsed != null && parsedFor != it.trim()) parsed = null }, Modifier.fillMaxWidth(), placeholder = { Text("For example: every Monday and Thursday at 7:30, and on the 1st of each month at 9. Or: weekdays at 8:15, but not in August.") }, minLines = 2, shape = RoundedCornerShape(12.dp))
+            fun understand(text: String) { reading = true; err = ""; scope.launch { try { val p = withContext(Dispatchers.IO) { api.parseSchedule(text) }; parsed = p; parsedFor = whenText.trim() } catch (e: ApiError) { parsed = null; err = e.message ?: "" }; reading = false } }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton({ if (whenText.isBlank()) err = "Write when it should run, for example: every Monday and Thursday at 7:30." else understand(whenText) }, Modifier.heightIn(min = 48.dp), enabled = !reading, shape = RoundedCornerShape(12.dp)) { Text(if (reading) "Reading…" else "Understand") }
+                if (agent.spec.prompt.isNotBlank() && timingHint(agent.spec.prompt)) TextButton({ whenText = agent.spec.prompt; understand(agent.spec.prompt) }, Modifier.heightIn(min = 48.dp), enabled = !reading) { Text("Read it from the agent's instructions") }
+                if (job != null) Muted("Now: ${job.human}")
+            }
+            parsed?.let { p -> Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = cardBorder()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { Text("Understood: ${p.human}", fontWeight = FontWeight.SemiBold); Muted("Next: ${p.next.joinToString(" · ")} (${p.tz})") } } }
+            Label(if (parsed != null) "Or pick" else "Or pick quickly")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { types.forEach { (v, l) -> FilterChip(st.value.type == v && parsed == null, { upd { type = v }; parsed = null; whenText = "" }, { Text(l) }, Modifier.heightIn(min = 48.dp), shape = CircleShape, colors = chipColors) } }
             val t = st.value.type
             if (t == "weekly") FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { DAYS.forEachIndexed { i, d -> FilterChip(st.value.dow == i, { upd { dow = i } }, { Text(d.take(3)) }, Modifier.heightIn(min = 48.dp), shape = CircleShape) } }
             if (t in listOf("daily", "weekdays", "weekly")) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { Muted("at"); OutlinedButton({ showTime = true }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("%02d:%02d".format(st.value.h, st.value.m)) }; Muted("Times use $tz") }
@@ -130,9 +143,8 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Cancel") }
                 Button({
                     if (prompt.isBlank() && agent.spec.prompt.isBlank()) { err = "Say what it should do each time, or give the agent instructions first."; return@Button }
-                    val sched = try { toSchedule(st.value, tz) } catch (e: ApiError) { err = e.message ?: ""; return@Button }
                     busy = true
-                    scope.launch { try { withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agent.id).put("name", job?.name ?: agent.spec.name).put("prompt", prompt).put("schedule", sched).put("enabled", enabled).put("fresh", fresh).put("notify", notify).also { if (job != null) it.put("notes", notes) }) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
+                    scope.launch { try { val sched = withContext(Dispatchers.IO) { if (parsed != null && parsedFor == whenText.trim()) parsed!!.schedule else if (whenText.isNotBlank()) api.parseSchedule(whenText).schedule else toSchedule(st.value, tz) }; withContext(Dispatchers.IO) { api.saveJob(job?.id, JSONObject().put("agent_id", agent.id).put("name", job?.name ?: agent.spec.name).put("prompt", prompt).put("schedule", sched).put("enabled", enabled).put("fresh", fresh).put("notify", notify).also { if (job != null) it.put("notes", notes) }) }; onSaved() } catch (e: ApiError) { err = "Couldn't save: ${e.message}"; busy = false } }
                 }, Modifier.heightIn(min = 48.dp), enabled = !busy, shape = RoundedCornerShape(12.dp)) { Text(if (busy) "Saving…" else "Save") }
             }
         }
@@ -287,4 +299,21 @@ fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) 
             }
         }
     }
+}
+
+/** After saving an agent whose instructions mention timing: offer to make it repeat, reading the timing from those instructions. */
+@Composable
+fun OfferRepeatDialog(agentId: Long, name: String, instructions: String, api: Api, onClose: () -> Unit, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var parsed by remember { mutableStateOf<Parsed?>(null) }; var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }
+    AlertDialog(onClose, title = { Text("Make $name repeat?") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("The instructions mention timing. I can read it and set up the repeat for you.")
+        parsed?.let { p -> Text("Understood: ${p.human}", fontWeight = FontWeight.SemiBold); Muted("Next: ${p.next.take(4).joinToString(" · ")}") }
+        if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) } },
+        confirmButton = { TextButton({ scope.launch { busy = true; err = ""; try {
+            val p = parsed
+            if (p == null) parsed = withContext(Dispatchers.IO) { api.parseSchedule(instructions) }
+            else { withContext(Dispatchers.IO) { api.saveJob(null, JSONObject().put("agent_id", agentId).put("name", name).put("prompt", "").put("schedule", p.schedule).put("enabled", true).put("fresh", true).put("notify", "always")) }; onDone() }
+        } catch (e: ApiError) { err = (e.message ?: "") + " You can use the Repeat button instead." }; busy = false } }, Modifier.heightIn(min = 48.dp), enabled = !busy) { Text(if (busy) "Reading…" else if (parsed == null) "Read the timing" else "Start repeating") } },
+        dismissButton = { TextButton(onClose, Modifier.heightIn(min = 48.dp)) { Text("No thanks") } })
 }

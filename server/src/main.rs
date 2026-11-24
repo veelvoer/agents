@@ -142,7 +142,7 @@ struct Agent {
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum Schedule {
-    Cron { expr: String, #[serde(default)] tz: String },
+    Cron { expr: String, #[serde(default)] tz: String, #[serde(default)] text: String },
     Every { minutes: u64 },
     Once { at: u64 },
     Hook,
@@ -344,11 +344,13 @@ fn tz_of(name: &str, fallback: &str) -> chrono_tz::Tz {
 
 fn next_at(sch: &Schedule, after: u64, default_tz: &str) -> Option<u64> {
     match sch {
-        Schedule::Cron { expr, tz } => {
+        Schedule::Cron { expr, tz, .. } => {
             let tz = tz_of(tz, default_tz);
-            let cron = croner::Cron::new(expr).parse().ok()?;
             let dt = chrono::DateTime::from_timestamp(after as i64, 0)?.with_timezone(&tz);
-            cron.find_next_occurrence(&dt, false).ok().map(|d| d.timestamp() as u64)
+            // several lines (separated by ;) mean "any of these": the next one that comes first
+            expr.split(';').filter(|p| !p.trim().is_empty())
+                .filter_map(|p| croner::Cron::new(p.trim()).parse().ok()?.find_next_occurrence(&dt, false).ok().map(|d| d.timestamp() as u64))
+                .min()
         }
         Schedule::Every { minutes } => Some(after + (*minutes).max(1) * 60),
         Schedule::Once { at } => (*at > after).then_some(*at),
@@ -369,6 +371,7 @@ fn describe(sch: &Schedule, tz: &str) -> String {
         Schedule::Once { at } => format!("Once, {}", local_text(*at, tz)),
         Schedule::Hook => "When its web link is called".into(),
         Schedule::Manual => "Only when I run it".into(),
+        Schedule::Cron { text, .. } if !text.is_empty() => text.clone(),
         Schedule::Cron { expr, .. } => {
             let f: Vec<&str> = expr.split_whitespace().collect();
             if f.len() == 5 && f[2] == "*" && f[3] == "*" {
@@ -396,11 +399,11 @@ fn parse_when(text: &str, tz: &str) -> Result<Schedule, String> {
     let t = text.trim().to_lowercase();
     let bad = || format!("I don't understand \"{text}\". Try: daily 08:00, weekdays 08:30, weekly monday 09:00, every 30 minutes, in 2 hours, at 2026-12-01 09:00, or cron 0 8 * * *");
     let w: Vec<&str> = t.split_whitespace().collect();
-    let cron = |m: u32, h: u32, dow: &str| Schedule::Cron { expr: format!("{m} {h} * * {dow}"), tz: tz.to_string() };
+    let cron = |m: u32, h: u32, dow: &str| Schedule::Cron { expr: format!("{m} {h} * * {dow}"), tz: tz.to_string(), text: String::new() };
     let unit = |n: u64, u: &str| -> Option<u64> { match u.trim_end_matches('s') { "minute" | "min" => Some(n), "hour" | "hr" | "h" => Some(n * 60), "day" | "d" => Some(n * 1440), _ => None } };
     match w.as_slice() {
-        ["cron", rest @ ..] => { let e = rest.join(" "); croner::Cron::new(&e).parse().map_err(|x| format!("bad cron \"{e}\": {x}"))?; Ok(Schedule::Cron { expr: e, tz: tz.into() }) }
-        [a, b, c, d, e] if croner::Cron::new(&format!("{a} {b} {c} {d} {e}")).parse().is_ok() => Ok(Schedule::Cron { expr: format!("{a} {b} {c} {d} {e}"), tz: tz.into() }),
+        ["cron", rest @ ..] => { let e = rest.join(" "); croner::Cron::new(&e).parse().map_err(|x| format!("bad cron \"{e}\": {x}"))?; Ok(Schedule::Cron { expr: e, tz: tz.into(), text: String::new() }) }
+        [a, b, c, d, e] if croner::Cron::new(&format!("{a} {b} {c} {d} {e}")).parse().is_ok() => Ok(Schedule::Cron { expr: format!("{a} {b} {c} {d} {e}"), tz: tz.into(), text: String::new() }),
         ["daily" | "everyday", at] | ["every", "day", "at", at] | ["daily", "at", at] => parse_clock(at).map(|(h, m)| cron(m, h, "*")).ok_or_else(bad),
         ["weekdays", at] | ["weekdays", "at", at] => parse_clock(at).map(|(h, m)| cron(m, h, "1-5")).ok_or_else(bad),
         ["weekends", at] | ["weekends", "at", at] => parse_clock(at).map(|(h, m)| cron(m, h, "0,6")).ok_or_else(bad),
@@ -929,8 +932,8 @@ fn build_job(r: &JobReq, tz: &str, id: u64, old: Option<&Job>) -> Result<Job, (S
     if !["always", "errors", "never"].contains(&r.notify.as_str()) { return Err(bad("notify must be always, errors or never".into())); }
     let schedule = match (&r.schedule, &r.when) {
         (Some(sch), _) => {
-            if let Schedule::Cron { expr, tz: z } = sch {
-                croner::Cron::new(expr).parse().map_err(|e| bad(format!("That schedule isn't valid: {e}")))?;
+            if let Schedule::Cron { expr, tz: z, .. } = sch {
+                for part in expr.split(';').filter(|p| !p.trim().is_empty()) { croner::Cron::new(part.trim()).parse().map_err(|e| bad(format!("That schedule isn't valid: {e}")))?; }
                 if !z.is_empty() && z.parse::<chrono_tz::Tz>().is_err() { return Err(bad(format!("Unknown time zone {z}"))); }
             }
             if let Schedule::Every { minutes } = sch { if *minutes < 1 { return Err(bad("Every needs at least 1 minute.".into())); } }
@@ -958,7 +961,8 @@ async fn jobs_list(State(s): State<S>) -> Json<Value> {
     Json(Value::Array(g.jobs.iter().map(|j| { let mut v = job_json(j, &g.settings.tz, names.get(&j.agent_id).map(String::as_str).unwrap_or("?")); v["running"] = json!(running.contains(&j.id)); v }).collect()))
 }
 
-async fn jobs_create(State(s): State<S>, Json(r): Json<JobReq>) -> Result<Json<Value>, (StatusCode, String)> {
+async fn jobs_create(State(s): State<S>, Json(mut r): Json<JobReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    resolve_when(&s, &mut r).await?;
     let mut g = s.db.lock().await;
     if !g.agents.iter().any(|a| a.id == r.agent_id) { return Err((StatusCode::NOT_FOUND, "no such agent".into())); }
     let id = g.jobs.iter().map(|j| j.id).max().map_or(1, |m| m + 1);
@@ -972,7 +976,8 @@ async fn jobs_create(State(s): State<S>, Json(r): Json<JobReq>) -> Result<Json<V
     Ok(Json(v))
 }
 
-async fn jobs_update(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<JobReq>) -> Result<Json<Value>, (StatusCode, String)> {
+async fn jobs_update(State(s): State<S>, Path(id): Path<u64>, Json(mut r): Json<JobReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    resolve_when(&s, &mut r).await?;
     let mut g = s.db.lock().await;
     let tz = g.settings.tz.clone();
     let idx = g.jobs.iter().position(|j| j.id == id).ok_or((StatusCode::NOT_FOUND, "no such task".into()))?;
@@ -1133,6 +1138,78 @@ async fn scheduler(s: S) {
     }
 }
 
+// ---------------------------------------------------------------- schedules in plain words
+
+const SCHEDULE_PROMPT: &str = "You turn a person's description of WHEN something should happen into a schedule. Reply with ONLY one JSON object, nothing else.\nIt is now {now} (time zone {tz}). Use that time zone.\nFormats:\n{\"type\":\"cron\",\"crons\":[\"m h dom mon dow\"],\"human\":\"short plain English\"}  - each cron has 5 fields: minute hour day-of-month month day-of-week (0=Sunday, 1=Monday ... 6=Saturday). Lists (1,4), ranges (1-5) and steps (*/15) are allowed; L in day-of-month means the last day of the month; 5#2 in day-of-week means the second Friday. Give several crons when different days have different times (the schedule runs at all of them).\n{\"type\":\"every\",\"minutes\":N,\"human\":\"...\"}  - a plain repeat every N minutes.\n{\"type\":\"once\",\"at\":\"YYYY-MM-DD HH:MM\",\"human\":\"...\"}  - exactly one moment in the future.\n{\"type\":\"error\",\"message\":\"what is unclear\"}  - when there is no usable timing in the text.\nIf the text contains other things besides the timing, only use the timing. If no time of day is given, use 09:00. human must describe exactly what you built, for example \"Every Monday and Thursday at 07:30\".\nText: \"\"\"{text}\"\"\"";
+
+async fn ai_json(s: &S, prompt: &str) -> Result<Value, String> {
+    let mut c = Command::new("claude");
+    c.args(["-p", prompt, "--output-format", "json", "--model", "claude-haiku-4-5-20251001", "--max-turns", "1"]).current_dir(data_dir(s)).kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(90), c.output()).await.map_err(|_| "Understanding the schedule took too long. Try again.".to_string())?.map_err(|e| format!("Couldn't start claude on the server: {e}"))?;
+    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| "Claude gave no answer. Is Claude Code logged in on the server?".to_string())?;
+    if v["is_error"].as_bool().unwrap_or(false) { return Err(cut(v["result"].as_str().unwrap_or("Claude could not answer."), 200)); }
+    let text = v["result"].as_str().unwrap_or("");
+    let (a, b) = (text.find('{'), text.rfind('}'));
+    match (a, b) { (Some(a), Some(b)) if b > a => serde_json::from_str(&text[a..=b]).map_err(|_| "I could not read the answer. Try saying it a bit differently.".to_string()), _ => Err("I could not read the answer. Try saying it a bit differently.".into()) }
+}
+
+/// Turns any plain-words timing ("every Monday and Thursday at 7:30, and on the 1st of every month at 9") into a schedule.
+async fn ai_schedule(s: &S, text: &str) -> Result<(Schedule, String), String> {
+    let tz = s.db.lock().await.settings.tz.clone();
+    let now_txt = chrono::Utc::now().with_timezone(&tz_of(&tz, "UTC")).format("%A %Y-%m-%d %H:%M").to_string();
+    let mut prompt = SCHEDULE_PROMPT.replace("{now}", &now_txt).replace("{tz}", &tz).replace("{text}", &cut(text, 3000));
+    for attempt in 0..2 {
+        let v = ai_json(s, &prompt).await?;
+        let human = v["human"].as_str().unwrap_or("").trim().to_string();
+        let built: Result<Schedule, String> = match v["type"].as_str() {
+            Some("cron") => {
+                let exprs: Vec<String> = v["crons"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|y| y.trim().to_string())).collect()).unwrap_or_default();
+                if exprs.is_empty() { Err("no cron lines".into()) } else {
+                    match exprs.iter().find_map(|e| croner::Cron::new(e).parse().err().map(|er| format!("\"{e}\": {er}"))) {
+                        Some(bad) => Err(format!("invalid cron {bad}")),
+                        None => Ok(Schedule::Cron { expr: exprs.join("; "), tz: tz.clone(), text: human.clone() }),
+                    }
+                }
+            }
+            Some("every") => match v["minutes"].as_u64() { Some(m) if m >= 1 => Ok(Schedule::Every { minutes: m }), _ => Err("minutes must be 1 or more".into()) },
+            Some("once") => {
+                let at = v["at"].as_str().unwrap_or("");
+                parse_when(&format!("at {at}"), &tz).and_then(|sch| match sch { Schedule::Once { at } if at > now() => Ok(Schedule::Once { at }), Schedule::Once { .. } => Err("that moment is in the past".into()), x => Ok(x) })
+            }
+            Some("error") => return Err(v["message"].as_str().unwrap_or("I could not find a time in that.").to_string()),
+            _ => Err("unknown type".into()),
+        };
+        match built {
+            Ok(sch) => { let h = if human.is_empty() { describe(&sch, &tz) } else { human }; return Ok((sch, h)); }
+            Err(e) if attempt == 0 => { prompt.push_str(&format!("\nYour previous answer was not usable ({e}). Answer again with a correct JSON object.")); }
+            Err(e) => return Err(format!("I could not turn that into a schedule ({e}). Try saying it a bit differently.")),
+        }
+    }
+    Err("I could not understand that.".into())
+}
+
+/// A job may carry "when" as free text: the quick phrases are read directly, anything else is read by the AI.
+async fn resolve_when(s: &S, r: &mut JobReq) -> Result<(), (StatusCode, String)> {
+    if r.schedule.is_some() { return Ok(()); }
+    let Some(w) = r.when.clone() else { return Ok(()) };
+    let tz = s.db.lock().await.settings.tz.clone();
+    r.schedule = Some(match parse_when(&w, &tz) { Ok(x) => x, Err(_) => ai_schedule(s, &w).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?.0 });
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct ParseReq { text: String }
+
+/// Preview for the apps: what was understood and when it would run next.
+async fn schedule_parse(State(s): State<S>, Json(r): Json<ParseReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    if r.text.trim().is_empty() { return Err((StatusCode::BAD_REQUEST, "Write when it should run, for example: every Monday and Thursday at 7:30.".into())); }
+    let tz = s.db.lock().await.settings.tz.clone();
+    let (sch, human) = match parse_when(&r.text, &tz) { Ok(x) => { let h = describe(&x, &tz); (x, h) } Err(_) => ai_schedule(&s, &r.text).await.map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))? };
+    let mut next = vec![]; let mut t = now();
+    for _ in 0..6 { match next_at(&sch, t, &tz) { Some(n) => { next.push(local_text(n, &tz)); t = n + 1; } None => break } }
+    Ok(Json(json!({"schedule": sch, "human": human, "next": next, "tz": tz})))
+}
+
 // ---------------------------------------------------------------- living agents
 
 const WAKE_BASE: u64 = 1 << 40;
@@ -1154,11 +1231,12 @@ struct WakeReq { when: String, #[serde(default)] reason: String }
 
 /// The agent chooses when it wakes up next ("in 2 hours", "tomorrow 08:00", "daily 08:00" = the next 08:00 ...).
 async fn wake_set(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<WakeReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let tz = s.db.lock().await.settings.tz.clone();
+    let parsed = match parse_when(&r.when, &tz) { Ok(x) => x, Err(_) => ai_schedule(&s, &r.when).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?.0 };
     let mut g = s.db.lock().await;
-    let tz = g.settings.tz.clone();
     let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
     let min = a.spec.wake_min.unwrap_or(15).max(1) * 60;
-    let sch = parse_when(&r.when, &tz).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let sch = parsed;
     let t = next_at(&sch, now(), &tz).ok_or((StatusCode::BAD_REQUEST, "that time is in the past".to_string()))?;
     let t = t.clamp(now() + min, now() + MAX_WAKE_SECS);
     a.next_wake = Some(t);
@@ -1477,6 +1555,7 @@ async fn main() {
         .route("/jobs/{id}/enabled", post(jobs_enabled))
         .route("/jobs/{id}/run", post(jobs_run_now))
         .route("/jobs/{id}/notes", post(jobs_notes))
+        .route("/schedule/parse", post(schedule_parse))
         .route("/hook/{secret}", post(hook).get(hook_get))
         .route("/activity", get(activity))
         .route("/notify", post(notify))

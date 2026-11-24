@@ -120,6 +120,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     var rev by remember { mutableLongStateOf(0L) }
     var repeatFor by remember { mutableStateOf<Long?>(null) }
     var lifeFor by remember { mutableStateOf<Long?>(null) }
+    var offer by remember { mutableStateOf<Triple<Long, String, String>?>(null) }
     val state = remember { ctx.getSharedPreferences("state", Context.MODE_PRIVATE) }
     var seen by remember { mutableLongStateOf(state.getLong("seen", -1L)) }
     val scope = rememberCoroutineScope()
@@ -202,11 +203,12 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
         }
     }
+    offer?.let { (id, nm, ins) -> OfferRepeatDialog(id, nm, ins, api, { offer = null }, { offer = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) }
     lifeFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> LifeSheet(ag, api, { lifeFor = null }, { lifeFor = null }) } }
     repeatFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> RepeatSheet(ag, (jobs ?: emptyList()).filter { it.agentId == id }, srv?.tz ?: java.util.TimeZone.getDefault().id, api, { repeatFor = null }, { repeatFor = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) } }
     if (editing != null) {
         val a = editing!!.first
-        EditorSheet(a, models, api, onClose = { editing = null }, onSaved = { id -> if (a == null) open = id; editing = null }, onDeleted = { open = null; editing = null })
+        EditorSheet(a, models, api, onClose = { editing = null }, onSaved = { id, sp -> if (a == null) open = id; editing = null; if (!sp.autonomous && timingHint(sp.prompt) && (jobs ?: emptyList()).none { it.agentId == id }) offer = Triple(id, sp.name, sp.prompt) }, onDeleted = { open = null; editing = null })
     }
 }
 
@@ -421,7 +423,7 @@ fun SettingsTab(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, err: String, a
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onClose: () -> Unit, onSaved: (Long) -> Unit, onDeleted: () -> Unit) {
+fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onClose: () -> Unit, onSaved: (Long, Spec) -> Unit, onDeleted: () -> Unit) {
     val scope = rememberCoroutineScope()
     val s = agent?.spec
     var name by remember { mutableStateOf(s?.name ?: "") }
@@ -462,13 +464,13 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 if (agent != null) {
                     TextButton({ confirmDelete = true }, Modifier.heightIn(min = 48.dp)) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                    TextButton({ scope.launch { try { val id = withContext(Dispatchers.IO) { api.save(null, spec().copy(name = name.trim() + " copy")) }; onSaved(id) } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Duplicate") }
+                    TextButton({ scope.launch { try { val sp2 = spec().copy(name = name.trim() + " copy"); val id = withContext(Dispatchers.IO) { api.save(null, sp2) }; onSaved(id, sp2) } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Duplicate") }
                 }
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Cancel") }
                 Button({
                     if (name.isBlank()) { err = "Give the agent a name."; return@Button }
                     busy = true
-                    scope.launch { try { val id = withContext(Dispatchers.IO) { api.save(agent?.id, spec()) }; onSaved(id) } catch (e: ApiError) { err = "Couldn't save: ${e.message}. Try again."; busy = false } }
+                    scope.launch { try { val sp2 = spec(); val id = withContext(Dispatchers.IO) { api.save(agent?.id, sp2) }; onSaved(id, sp2) } catch (e: ApiError) { err = "Couldn't save: ${e.message}. Try again."; busy = false } }
                 }, Modifier.heightIn(min = 48.dp), enabled = !busy, shape = RoundedCornerShape(12.dp)) { Text(if (busy) "Saving…" else "Save") }
             }
         }

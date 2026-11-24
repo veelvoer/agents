@@ -15,6 +15,7 @@ data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: 
                  val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0)
 data class Msg(val role: String, val text: String, val at: Long)
 data class Page(val start: Int, val total: Int, val messages: List<Msg>)
+data class Parsed(val schedule: JSONObject, val human: String, val next: List<String>, val tz: String)
 data class AgentList(val rev: Long, val agents: List<Agent>, val actLast: Long = 0, val paused: Boolean = false)
 data class Job(val id: Long, val agentId: Long, val agent: String, val name: String, val prompt: String, val human: String, val enabled: Boolean, val fresh: Boolean, val notify: String,
                val next: String?, val lastRun: Long, val lastStatus: String?, val lastText: String, val runs: Int, val cost: Double, val hook: String?, val running: Boolean, val schedule: JSONObject, val notes: String = "")
@@ -64,6 +65,7 @@ class Api(val url: String, val key: String) {
             if (j.isNull("next")) null else j.optString("next"), if (j.isNull("last_run")) 0 else j.optLong("last_run"), if (j.isNull("last_status")) null else j.optString("last_status"), j.optString("last_text"),
             j.optInt("runs"), j.optDouble("cost"), if (j.isNull("hook")) null else j.optString("hook"), j.optBoolean("running"), j.getJSONObject("schedule"), j.optString("notes"))
     } }
+    fun parseSchedule(text: String): Parsed { val d = JSONObject(call("POST", "/schedule/parse", JSONObject().put("text", text).toString(), 120_000)); val n = d.getJSONArray("next"); return Parsed(d.getJSONObject("schedule"), d.optString("human"), (0 until n.length()).map { n.getString(it) }, d.optString("tz")) }
     fun saveJob(id: Long?, body: JSONObject) { if (id == null) call("POST", "/jobs", body.toString()) else call("PUT", "/jobs/$id", body.toString()) }
     fun deleteJob(id: Long) { call("DELETE", "/jobs/$id") }
     fun jobEnabled(id: Long, on: Boolean) { call("POST", "/jobs/$id/enabled", JSONObject().put("enabled", on).toString()) }

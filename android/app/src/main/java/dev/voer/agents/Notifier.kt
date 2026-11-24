@@ -46,7 +46,7 @@ class PollWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         val last = st.getLong("notified", -1)
         return try {
             val (newest, items) = api.activity(after = if (last < 0) null else last, limit = 30)
-            if (last >= 0 && !Notifier.appVisible) items.filter { it.kind != "system" }.sortedBy { it.id }.forEach { Notifier.show(c, it) }
+            if (last >= 0 && !Notifier.appVisible) items.filter { it.kind != "system" && it.kind != "thought" }.sortedBy { it.id }.forEach { Notifier.show(c, it) }
             st.edit().putLong("notified", newest).apply()
             Result.success()
         } catch (e: ApiError) { Result.retry() }

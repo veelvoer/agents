@@ -13,6 +13,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>', play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>', alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  sparkle: '<path d="M9.94 14.34a2 2 0 0 0-1.28-1.28L2.4 11.5a.5.5 0 0 1 0-.96l6.26-1.56a2 2 0 0 0 1.28-1.28l1.56-6.26a.5.5 0 0 1 .96 0l1.56 6.26a2 2 0 0 0 1.28 1.28l6.26 1.56a.5.5 0 0 1 0 .96l-6.26 1.56a2 2 0 0 0-1.28 1.28l-1.56 6.26a.5.5 0 0 1-.96 0z"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>', stop: '<rect width="12" height="12" x="6" y="6" rx="2"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -200,7 +201,7 @@ function agentsView() {
 function itemHtml(a) {
   const run = a.status === 'running';
   return `<div class="item ${S.sel === a.id ? 'on' : ''}" role="button" tabindex="0" draggable="${!S.q}" data-id="${a.id}"><div class="t"><span class="dot ${a.status}"></span><span class="ellip grow">${esc(a.spec.name)}</span>${a.pinned ? `<span class="pin" aria-label="Pinned">${icon('pin')}</span>` : ''}${run ? '<span class="small muted">working</span>' : ''}</div>
-  <div class="small muted">${esc(modelName(a.spec.model))} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>${(() => { const r = repeatInfo(a); return r ? `<div class="small ${r.on ? '' : 'muted'} repeatline">${icon('repeat')}<span>${esc(r.text)}</span></div>` : ''; })()}
+  <div class="small muted">${esc(modelName(a.spec.model))} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>${(() => { if (a.spec.autonomous) return `<div class="small repeatline">${icon('sparkle')}<span>Alive${a.status === 'running' ? ' · awake now' : a.next_wake ? ' · next thought ' + wakeText(a.next_wake) : ''}</span></div>`; const r = repeatInfo(a); return r ? `<div class="small ${r.on ? '' : 'muted'} repeatline">${icon('repeat')}<span>${esc(r.text)}</span></div>` : ''; })()}
   <div class="act"><button class="ic" data-pin="${a.id}" aria-label="${a.pinned ? 'Unpin' : 'Pin'} ${esc(a.spec.name)}" title="${a.pinned ? 'Unpin' : 'Pin to top'}">${icon('pin')}</button></div></div>`;
 }
 function renderSide() {
@@ -234,7 +235,7 @@ function renderPane() {
   const pane = $('#pane'); if (!pane) return; const a = byId(S.sel);
   if (!a) { pane.innerHTML = `<div class="empty">${MARK}<h3>Pick an agent</h3><p class="small">Choose one on the left, or press <span class="kbd">Ctrl</span> <span class="kbd">N</span> for a new one. Any agent can repeat by itself: open it and press Repeat.</p></div>`; return; }
   pane.innerHTML = `<div class="chat-head"><div class="grow"><h3 id="hname"></h3><div class="small muted" id="meta"></div></div>
-  <button class="ghost" id="hrep"></button><button class="ic ghost" id="hpin"></button><button class="ic ghost" id="edit" aria-label="Edit agent" title="Edit agent">${icon('edit')}</button><button class="ic ghost" id="clear" aria-label="Clear chat" title="Clear chat">${icon('trash')}</button></div>
+  <button class="ghost" id="hlife"></button><button class="ghost" id="hrep"></button><button class="ic ghost" id="hpin"></button><button class="ic ghost" id="edit" aria-label="Edit agent" title="Edit agent">${icon('edit')}</button><button class="ic ghost" id="clear" aria-label="Clear chat" title="Clear chat">${icon('trash')}</button></div>
   <div class="msgs" id="msgs"><div class="col" id="col"></div></div>
   <div class="composer"><div class="cbox"><textarea id="in" rows="1" placeholder="Message ${esc(a.spec.name)}" aria-label="Message"></textarea><button class="primary" id="send"></button></div></div>`;
   updateHead(); renderMsgs();
@@ -248,6 +249,7 @@ function renderPane() {
 function updateHead() {
   const a = byId(S.sel); if (!a || !$('#hname')) return;
   $('#hname').textContent = a.spec.name; $('#meta').textContent = `${modelName(a.spec.model)} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}`;
+  const lb = $('#hlife'); lb.innerHTML = icon('sparkle') + `<span>${a.spec.autonomous ? 'Alive' : 'Make alive'}</span>`; lb.title = a.spec.autonomous ? (a.next_wake ? 'Next thought ' + wakeText(a.next_wake) : 'Lives on its own') : 'Let this agent live on its own'; lb.style.color = a.spec.autonomous ? 'var(--clay)' : ''; lb.onclick = () => lifeDialog(byId(a.id));
   const r = repeatInfo(a), hb = $('#hrep'); hb.innerHTML = icon('repeat') + `<span>${r && r.on ? 'Repeating' : 'Repeat'}</span>`; hb.title = r ? r.text : 'Make this agent repeat by itself'; hb.setAttribute('aria-label', r ? 'Repeat settings: ' + r.text : 'Make this agent repeat'); hb.style.color = r && r.on ? 'var(--clay)' : ''; hb.onclick = () => repeatDialog(byId(a.id));
   const p = $('#hpin'); p.innerHTML = icon('pin'); p.setAttribute('aria-label', a.pinned ? 'Unpin' : 'Pin'); p.title = a.pinned ? 'Unpin' : 'Pin to top'; p.style.color = a.pinned ? 'var(--clay)' : ''; p.onclick = () => togglePin(byId(a.id));
   const run = a.status === 'running', b = $('#send'); if (b) { b.innerHTML = icon(run ? 'stop' : 'send'); b.setAttribute('aria-label', run ? 'Stop' : 'Send'); b.title = run ? 'Stop' : 'Send'; b.onclick = () => (run ? stopRun(a.id) : send(a.id)); }
@@ -281,7 +283,7 @@ function confirmBox(title, text, ok, fn) {
 }
 
 function editor(a) {
-  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '' };
+  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false };
   const d = document.createElement('div'); d.className = 'scrim';
   const known = () => S.models.some((m) => m[0] === sp.model);
   const draw = () => {
@@ -292,6 +294,8 @@ function editor(a) {
     <div class="field"><label class="label" for="p">Instructions</label><textarea id="p" placeholder="What this agent is for and how it should answer">${esc(sp.prompt)}</textarea><p class="tip">Describe the agent's job here. To make it work by itself, for example every morning, save it and then press Repeat in its chat.</p></div>
     <div class="field"><label class="label" for="mem">Memory</label><textarea id="mem" placeholder="Facts it should always remember">${esc(sp.memory)}</textarea></div>
     <div class="field"><label class="label" for="mcp">Tools (MCP file on the server)</label><input id="mcp" placeholder="/home/me/browser-mcp.json" value="${esc(sp.mcp_config)}"></div>
+    <div class="row" style="min-height:40px"><span class="grow"><b>Lives on its own</b> <span class="small muted">: wakes up by itself, thinks, acts and decides when to wake next, all the time</span></span><button class="toggle ${sp.autonomous ? 'on' : ''}" id="e-life" role="switch" aria-checked="${!!sp.autonomous}" aria-label="Lives on its own"></button></div>
+    ${!sp.autonomous && TIMING_WORDS.test(sp.prompt) ? '<p class="tip" style="color:var(--clay)">These instructions mention doing things over time. Turn on Lives on its own and the agent works out the schedule by itself.</p>' : ''}
     <div class="field"><span class="label">What it may do on the server</span>${seg('e-auto', [['safe', 'Look only'], ['standard', 'Edit files and browse'], ['full', 'Everything']], sp.autonomy)}<p class="tip">${{ safe: 'Reads files and answers. Nothing is changed.', standard: 'Can edit files in its folder and search the web.', full: 'Can run any command on the server without asking. Only for agents you trust.' }[sp.autonomy]}</p></div>
     <div class="row" style="min-height:40px"><span class="grow">Agentic tools: message me, schedule tasks, remember, ask other agents</span><button class="toggle ${sp.os_tools ? 'on' : ''}" id="e-os" role="switch" aria-checked="${sp.os_tools}" aria-label="Agentic tools"></button></div>
     <div class="row wrap"><div class="field grow"><label class="label" for="e-cap">Daily limit for automatic runs ($, optional)</label><input id="e-cap" type="number" min="0" step="0.5" value="${sp.daily_cap ?? ''}"></div><div class="field grow"><label class="label" for="e-wd">Working folder (optional)</label><input id="e-wd" placeholder="/home/me/projects/site" value="${esc(sp.workdir)}"></div></div>
@@ -301,6 +305,7 @@ function editor(a) {
     const keep = () => { sp.name = $('#n', d).value; sp.prompt = $('#p', d).value; sp.memory = $('#mem', d).value; sp.mcp_config = $('#mcp', d).value; sp.daily_cap = $('#e-cap', d).value === '' ? null : +$('#e-cap', d).value; sp.workdir = $('#e-wd', d).value; const cm = $('#cm', d).value.trim(); if (cm) sp.model = cm; };
     $$('[data-m]', d).forEach((b) => (b.onclick = () => { keep(); sp.model = b.dataset.m; $('#cm', d) && ($('#cm', d).value = ''); draw(); }));
     $$('#e-auto button', d).forEach((b) => (b.onclick = () => { keep(); sp.autonomy = b.dataset.v; draw(); }));
+    $('#e-life', d).onclick = () => { keep(); sp.autonomous = !sp.autonomous; if (sp.autonomous && sp.autonomy === 'safe') sp.autonomy = 'standard'; draw(); };
     $('#e-os', d).onclick = () => { keep(); sp.os_tools = !sp.os_tools; draw(); };
     $('#sub', d).onclick = () => { keep(); sp.subagents = !sp.subagents; draw(); };
     $('#cancel', d).onclick = () => d.remove();

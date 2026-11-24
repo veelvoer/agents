@@ -151,12 +151,12 @@ fun RepeatSheet(agent: Agent, jobs: List<Job>, tz: String, api: Api, onClose: ()
 fun ActivityTab(acts: List<Act>, seen: Long, err: String, topInset: Boolean) {
     var filter by remember { mutableStateOf("all") }
     var open by remember { mutableStateOf<Long?>(null) }
-    val list = acts.filter { filter == "all" || (filter == "results" && it.kind == "run") || (filter == "messages" && it.kind == "notify") || (filter == "problems" && (it.kind == "error" || it.kind == "system")) }
+    val list = acts.filter { filter == "all" || (filter == "results" && it.kind == "run") || (filter == "messages" && it.kind == "notify") || (filter == "thoughts" && it.kind == "thought") || (filter == "problems" && (it.kind == "error" || it.kind == "system")) }
     val dayFmt = remember { SimpleDateFormat("EEEE d MMMM", Locale.getDefault()) }; val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val today = remember { dayFmt.format(Date()) }; val yesterday = remember { dayFmt.format(Date(System.currentTimeMillis() - 86400000)) }
     Column(Modifier.fillMaxSize().then(if (topInset) Modifier.statusBarsPadding() else Modifier)) {
         Row(Modifier.padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("Activity", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); StatusPill(err) }
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) { Segmented(listOf("all" to "Everything", "results" to "Results", "messages" to "Messages", "problems" to "Problems"), filter) { filter = it } }
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) { Segmented(listOf("all" to "Everything", "results" to "Results", "messages" to "Messages", "thoughts" to "Thoughts", "problems" to "Problems"), filter) { filter = it } }
         if (list.isEmpty()) Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Nothing here yet", style = MaterialTheme.typography.titleMedium); Muted("When a task runs or an agent messages you, it shows up here.") }
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             var last = ""
@@ -165,7 +165,7 @@ fun ActivityTab(acts: List<Act>, seen: Long, err: String, topInset: Boolean) {
                 if (label != last) { last = label; item(key = "d$label") { Label(label) } }
                 item(key = e.id) {
                     val isOpen = open == e.id
-                    Card({ open = if (isOpen) null else e.id }, Modifier.animateContentSize(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = if (e.id > seen && e.kind != "system") BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .6f)) else cardBorder()) {
+                    Card({ open = if (isOpen) null else e.id }, Modifier.animateContentSize(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = if (e.id > seen && e.kind != "system" && e.kind != "thought") BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .6f)) else cardBorder()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(e.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = if (isOpen) 6 else 1, overflow = TextOverflow.Ellipsis)
@@ -244,6 +244,47 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton({ put(JSONObject().put("ntfy_server", ntfyS).put("ntfy_topic", ntfyT).also { if (hook.isNotBlank()) it.put("webhook_url", hook) }, "Saved") }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
             Button({ scope.launch { note = try { withContext(Dispatchers.IO) { api.testNotify() }.let { if (it.isEmpty()) "Test message sent. Check your channels." else "Problem: $it" } } catch (e: ApiError) { e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Send a test") }
+        }
+    }
+}
+
+// ---- life: an agent that lives on its own ----
+private val TIMING = Regex("\\b(every (day|morning|evening|night|hour|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each (day|morning|evening|week)|daily|weekly|hourly|always|forever|24/7|all the time|keep (on )?(working|going|developing)|live online)\\b", RegexOption.IGNORE_CASE)
+fun timingHint(prompt: String) = TIMING.containsMatchIn(prompt)
+fun wakeText(t: Long): String { if (t <= 0) return ""; val d = Date(t * 1000); val same = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(d) == SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date()); return (if (same) "today " else SimpleDateFormat("EEE d MMM ", Locale.getDefault()).format(d)) + SimpleDateFormat("HH:mm", Locale.getDefault()).format(d) }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val sp = agent.spec
+    var journal by remember { mutableStateOf(agent.journal) }
+    var wakeMin by remember { mutableStateOf(sp.wakeMin.toString()) }; var maxWakes by remember { mutableStateOf(sp.maxWakes.toString()) }
+    var err by remember { mutableStateOf("") }
+    fun put(patch: Spec) { scope.launch { try { withContext(Dispatchers.IO) { api.save(agent.id, patch) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }
+    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (sp.autonomous) "${sp.name} is alive" else "${sp.name} is not alive", style = MaterialTheme.typography.headlineMedium)
+            Muted(if (sp.autonomous) "It wakes up by itself, thinks about its purpose (its instructions), does things with its tools, writes in its journal, and decides when to wake next. It is not waiting for you." else "Turn this on and the agent lives on the server by itself: it decides what to do and when, keeps working for days, and tells you only when it matters.")
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Text("Lives on its own", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                Switch(sp.autonomous, { on -> put(sp.copy(autonomous = on, autonomy = if (on && sp.autonomy == "safe") "standard" else sp.autonomy)) }) }
+            if (sp.autonomous) {
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = cardBorder()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (agent.running) "Awake right now." else if (agent.nextWake > 0) "Next wake-up: ${wakeText(agent.nextWake)}" + (if (agent.wakeReason.isNotBlank()) " · ${agent.wakeReason}" else "") else "Waking up soon.")
+                    Muted("${agent.wakes} wake-up${if (agent.wakes == 1L) "" else "s"} so far" + if (agent.lastWake > 0) " · last ${ago(agent.lastWake)}" else "") } }
+                OutlinedTextField(journal, { journal = it }, Modifier.fillMaxWidth(), label = { Text("Its journal (it writes this itself, you can edit)") }, minLines = 5, shape = RoundedCornerShape(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(wakeMin, { wakeMin = it.filter { c -> c.isDigit() } }, Modifier.weight(1f), label = { Text("Wake at most every (min)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), shape = RoundedCornerShape(12.dp))
+                    OutlinedTextField(maxWakes, { maxWakes = it.filter { c -> c.isDigit() } }, Modifier.weight(1f), label = { Text("Wake-ups per day") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), shape = RoundedCornerShape(12.dp))
+                }
+                Muted("Every wake-up uses your Claude subscription. Fewer wake-ups and a daily cost limit keep usage calm. What it may do on the server is set by its access level (now: ${when (sp.autonomy) { "full" -> "everything"; "standard" -> "edit files and browse"; else -> "look only" }}). To let it run programs, such as tests or scripts, set its access to Everything.")
+            } else Muted("Tip: write its purpose in the Instructions, for example: Explain something new about quantum computers every morning, starting from the basics. It works out the schedule by itself.")
+            if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                if (sp.autonomous) TextButton({ scope.launch { try { withContext(Dispatchers.IO) { api.wakeNow(agent.id) }; onClose() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Wake up now") }
+                OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Close") }
+                if (sp.autonomous) Button({ scope.launch { try { withContext(Dispatchers.IO) { api.saveJournal(agent.id, journal); api.save(agent.id, sp.copy(wakeMin = (wakeMin.toIntOrNull() ?: 15).coerceAtLeast(1), maxWakes = (maxWakes.toIntOrNull() ?: 24).coerceIn(1, 200))) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
+            }
         }
     }
 }

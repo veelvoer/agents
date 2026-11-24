@@ -21,7 +21,9 @@ app.whenReady().then(async () => {
   await js(`document.querySelector('#edit').click()`); await shot('4-editor');
   await js(`document.querySelector('#cancel').click(); document.querySelector('#hrep').click()`); await wait(500); await shot('5-repeat');
   await js(`document.querySelector('[data-t=weekly]').click()`); await wait(300); await shot('6-repeat-weekly');
-  await js(`document.querySelector('#jcancel').click(); document.querySelector('[data-tab=activity]').click()`); await wait(900); await shot('9-activity');
+  await js(`document.querySelector('#jcancel').click(); document.querySelector('#hlife').click()`); await wait(500); await shot('7-life');
+  await js(`document.querySelector('#l-cancel').click()`);
+  await js(`document.querySelector('[data-tab=activity]').click()`); await wait(900); await shot('9-activity');
   await js(`document.querySelector('[data-tab=usage]').click()`); await shot('10-usage');
   await js(`document.querySelector('[data-tab=settings]').click()`); await wait(900); await shot('11-settings');
   await js(`document.querySelector('.page').scrollTop = 560`); await wait(300); await shot('12-settings2');

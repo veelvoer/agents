@@ -46,7 +46,7 @@ class ListenService : Service() {
                 if (marker < 0) { st.edit().putLong("notified", l.actLast).apply(); continue }
                 if (l.actLast > marker) {
                     val (newest, items) = api.activity(after = marker, limit = 30)
-                    if (!Notifier.appVisible) items.filter { it.kind != "system" }.sortedBy { it.id }.forEach { Notifier.show(this@ListenService, it) }
+                    if (!Notifier.appVisible) items.filter { it.kind != "system" && it.kind != "thought" }.sortedBy { it.id }.forEach { Notifier.show(this@ListenService, it) }
                     st.edit().putLong("notified", newest).apply()
                 }
             } catch (e: CancellationException) { throw e

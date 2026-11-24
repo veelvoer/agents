@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::TimeZone;
+use chrono::{Datelike, TimeZone};
 use curlx::Req;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -76,6 +76,15 @@ struct Spec {
     /// Give the agent the agentic-os tools (notify, schedule, remember, ask other agents).
     #[serde(default = "d_true")]
     os_tools: bool,
+    /// The agent lives on its own: it wakes up, thinks, acts, and chooses when to wake next.
+    #[serde(default)]
+    autonomous: bool,
+    /// Fewest minutes between two wake-ups (default 15).
+    #[serde(default)]
+    wake_min: Option<u64>,
+    /// Most wake-ups per 24 hours (default 24).
+    #[serde(default)]
+    max_wakes: Option<u32>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -111,6 +120,21 @@ struct Agent {
     /// Only read from old files (0.2.x); chats live in chats/<id>.jsonl.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     messages: Vec<Msg>,
+    /// The agent's own long-term notes about its life and work (it writes this itself).
+    #[serde(default)]
+    journal: String,
+    #[serde(default)]
+    next_wake: Option<u64>,
+    #[serde(default)]
+    wake_reason: String,
+    #[serde(default)]
+    wakes: u64,
+    #[serde(default)]
+    last_wake: u64,
+    #[serde(default)]
+    wake_log: Vec<u64>,
+    #[serde(default)]
+    wake_fails: u32,
     #[serde(skip)]
     running: bool,
 }
@@ -396,6 +420,14 @@ fn parse_when(text: &str, tz: &str) -> Result<Schedule, String> {
             let dt = zone.with_ymd_and_hms(parts[0] as i32, parts[1], parts[2], h, m, 0).single().ok_or_else(bad)?;
             Ok(Schedule::Once { at: dt.timestamp() as u64 })
         }
+        ["tomorrow", rest @ ..] => {
+            let at = rest.iter().find(|x| **x != "at").ok_or_else(bad)?;
+            let (h, m) = parse_clock(at).ok_or_else(bad)?;
+            let zone = tz_of(tz, "UTC");
+            let d = chrono::Utc::now().with_timezone(&zone).date_naive().succ_opt().ok_or_else(bad)?;
+            let dt = zone.with_ymd_and_hms(d.year(), d.month(), d.day(), h, m, 0).single().ok_or_else(bad)?;
+            Ok(Schedule::Once { at: dt.timestamp() as u64 })
+        }
         ["hook"] | ["webhook"] => Ok(Schedule::Hook),
         ["manual"] => Ok(Schedule::Manual),
         _ => Err(bad()),
@@ -425,6 +457,11 @@ struct Info {
     last_active: u64,
     messages: usize,
     daily: Vec<(String, Day)>,
+    journal: String,
+    next_wake: Option<u64>,
+    wake_reason: String,
+    wakes: u64,
+    last_wake: u64,
 }
 
 fn info(a: &Agent, msgs: usize) -> Info {
@@ -432,6 +469,7 @@ fn info(a: &Agent, msgs: usize) -> Info {
         id: a.id, spec: a.spec.clone(), status: if a.running { "running" } else { "idle" }, usage: a.usage.clone(),
         pinned: a.pinned, order: a.order, last_active: a.last_active, messages: msgs,
         daily: a.daily.iter().rev().take(SHOW_DAYS).rev().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        journal: a.journal.clone(), next_wake: a.next_wake, wake_reason: a.wake_reason.clone(), wakes: a.wakes, last_wake: a.last_wake,
     }
 }
 
@@ -469,7 +507,8 @@ async fn create(State(s): State<S>, Json(spec): Json<Spec>) -> Json<u64> {
     let mut g = s.db.lock().await;
     let id = g.agents.iter().map(|a| a.id).max().map_or(1, |m| m + 1);
     let order = g.agents.iter().map(|a| a.order).max().map_or(0, |m| m + 1);
-    g.agents.push(Agent { id, spec, usage: Usage::default(), session: None, pinned: false, order, last_active: now(), daily: BTreeMap::new(), messages: vec![], running: false });
+    let next_wake = if spec.autonomous { Some(now() + 5) } else { None };
+    g.agents.push(Agent { id, spec, usage: Usage::default(), session: None, pinned: false, order, last_active: now(), daily: BTreeMap::new(), messages: vec![], journal: String::new(), next_wake, wake_reason: String::new(), wakes: 0, last_wake: 0, wake_log: vec![], wake_fails: 0, running: false });
     save(&g, &s.file);
     drop(g);
     bump(&s);
@@ -479,7 +518,11 @@ async fn create(State(s): State<S>, Json(spec): Json<Spec>) -> Json<u64> {
 async fn update(State(s): State<S>, Path(id): Path<u64>, Json(spec): Json<Spec>) -> StatusCode {
     let mut g = s.db.lock().await;
     match g.agents.iter_mut().find(|a| a.id == id) {
-        Some(a) => { a.spec = spec; save(&g, &s.file); drop(g); bump(&s); StatusCode::OK }
+        Some(a) => {
+            if spec.autonomous && !a.spec.autonomous { a.next_wake = Some(now() + 5); a.wake_fails = 0; }
+            if !spec.autonomous { a.next_wake = None; }
+            a.spec = spec; save(&g, &s.file); drop(g); bump(&s); StatusCode::OK
+        }
         None => StatusCode::NOT_FOUND,
     }
 }
@@ -594,6 +637,8 @@ struct RunOpts {
     job_name: Option<String>,
     job_id: Option<u64>,
     check_cap: bool,
+    /// an automatic wake-up of a living agent
+    wake: bool,
 }
 
 struct Out { text: String, ok: bool, limited: bool, cost: f64 }
@@ -604,13 +649,13 @@ const OS_PREAMBLE: &str = "You are the agent \"{name}\" on an always-on server, 
 You have the agentic-os tools: notify (message the user), schedule_task (do something later or on repeat), list_tasks, delete_task, remember (keep a short fact), ask_agent (delegate to another agent). \
 When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. Be brief and concrete.";
 
-fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>) -> Option<PathBuf> {
+fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let port = s.addr.rsplit(':').next().unwrap_or("7777");
     let dir = data_dir(s).join("mcp");
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{id}-d{depth}-j{}.json", job.unwrap_or(0)));
-    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string(), "AGENT_JOB": job.unwrap_or(0).to_string()}}}});
+    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string(), "AGENT_JOB": job.unwrap_or(0).to_string(), "AGENT_AUTONOMOUS": if autonomous { "1" } else { "0" }}}}});
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).ok()?;
     f.write_all(cfg.to_string().as_bytes()).ok()?;
@@ -623,7 +668,7 @@ fn looks_limited(t: &str) -> bool {
 }
 
 async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (StatusCode, String)> {
-    let (spec, session, name, settings, cancel, job_notes) = {
+    let (spec, session, name, settings, cancel, job_notes, journal) = {
         let mut g = s.db.lock().await;
         let settings = g.settings.clone();
         let job_notes = o.job_id.and_then(|j| g.jobs.iter().find(|x| x.id == j)).map(|j| j.notes.clone()).unwrap_or_default();
@@ -639,7 +684,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         a.last_active = now();
         let cancel = Arc::new(Notify::new());
         s.rt.lock().await.cancel.insert(id, cancel.clone());
-        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes)
+        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes, a.journal.clone())
     };
     if let Some(l) = &o.label { append_msg(s, id, "auto", l).await; } else { append_msg(s, id, "user", msg).await; }
     bump(s);
@@ -647,8 +692,13 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     let tz = tz_of(&settings.tz, "UTC");
     let mut sp = spec.prompt.clone();
     if spec.os_tools { sp.push_str("\n\n"); sp.push_str(&OS_PREAMBLE.replace("{name}", &name).replace("{now}", &chrono::Utc::now().with_timezone(&tz).format("%A %Y-%m-%d %H:%M (%Z)").to_string())); }
+    if spec.autonomous {
+        sp.push_str("\n\nYou live on this server on your own, all the time. Your instructions above are your purpose and your life, not a one-time request: you decide what is worth doing, when, and for how long, and you keep developing things over days and weeks. You have a private workspace folder (your current folder) where your files and projects stay. You also keep a journal that you read every time you wake up. Update it with save_journal when something is worth remembering (plans, what you built, what you learned, what is next). Choose when to wake next with set_next_wake (sleep long when nothing is needed; if your instructions say when to act, such as every morning, schedule exactly that). Only call notify when the user really should hear something. Never ask the user to confirm routine things: decide and act. Your journal:\n");
+        sp.push_str(if journal.trim().is_empty() { "(empty: you have just come to life)" } else { journal.trim() });
+    }
     if !settings.global_memory.is_empty() { sp.push_str("\n\nShared memory (all agents):\n"); sp.push_str(&settings.global_memory); }
     if !spec.memory.is_empty() { sp.push_str("\n\nMemory:\n"); sp.push_str(&spec.memory); }
+    if o.wake { sp.push_str("\n\nThis is an automatic wake-up. Nobody is waiting for your reply, so your final reply is only a short private thought for your own log. Do the real work with your tools, then call save_journal and set_next_wake before you finish."); }
     if let Some(j) = &o.job_name {
         sp.push_str(&format!("\n\nThis is an automatic scheduled run (\"{j}\"). Nobody is here to answer questions, so do not ask any. Do the job now and reply with only the result the user should read, short and clear. Do not say that you will do it later, and do not schedule anything: the schedule already exists."));
         if spec.os_tools {
@@ -658,7 +708,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
 
     let workdir = spec.workdir.clone().filter(|w| !w.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir(s).join("workspaces").join(id.to_string()));
     let _ = std::fs::create_dir_all(&workdir);
-    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id) } else { None };
+    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id, spec.autonomous) } else { None };
 
     let build = |resume: Option<&str>| {
         let mut c = Command::new("claude");
@@ -1050,6 +1100,7 @@ async fn scheduler(s: S) {
         tokio::time::sleep(Duration::from_secs(15)).await;
         let t = now();
         let mut due = vec![];
+        let mut wake_due: Vec<u64> = vec![];
         {
             let mut g = s.db.lock().await;
             if g.settings.paused || g.settings.pause_until > t { continue; }
@@ -1058,6 +1109,9 @@ async fn scheduler(s: S) {
             let running = s.rt.lock().await.jobs_running.clone();
             let mut changed = false;
             let mut missed = vec![];
+            for a in g.agents.iter_mut().filter(|a| a.spec.autonomous && !a.running) {
+                match a.next_wake { None => { a.next_wake = Some(t); changed = true; } Some(n) if n <= t => wake_due.push(a.id), _ => {} }
+            }
             for j in g.jobs.iter_mut().filter(|j| j.enabled) {
                 let Some(n) = j.next_at else { continue };
                 if n > t { continue; }
@@ -1075,7 +1129,126 @@ async fn scheduler(s: S) {
             for m in missed { act(&s, "system", None, None, "Missed a run", &format!("\"{m}\" was due while the server was off or paused, so that run was skipped.")).await; }
         }
         for id in due { let s2 = s.clone(); tokio::spawn(async move { run_job(s2, id, None).await }); }
+        for id in wake_due { let s2 = s.clone(); tokio::spawn(async move { run_wake(s2, id).await }); }
     }
+}
+
+// ---------------------------------------------------------------- living agents
+
+const WAKE_BASE: u64 = 1 << 40;
+const MAX_WAKE_SECS: u64 = 7 * 86400;
+
+#[derive(Deserialize)]
+struct JournalReq { text: String }
+
+async fn journal_put(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<JournalReq>) -> StatusCode {
+    let mut g = s.db.lock().await;
+    match g.agents.iter_mut().find(|a| a.id == id) {
+        Some(a) => { a.journal = cut(&r.text, 6000).trim_end_matches('…').to_string(); save(&g, &s.file); drop(g); bump(&s); StatusCode::OK }
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
+#[derive(Deserialize)]
+struct WakeReq { when: String, #[serde(default)] reason: String }
+
+/// The agent chooses when it wakes up next ("in 2 hours", "tomorrow 08:00", "daily 08:00" = the next 08:00 ...).
+async fn wake_set(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<WakeReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut g = s.db.lock().await;
+    let tz = g.settings.tz.clone();
+    let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
+    let min = a.spec.wake_min.unwrap_or(15).max(1) * 60;
+    let sch = parse_when(&r.when, &tz).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let t = next_at(&sch, now(), &tz).ok_or((StatusCode::BAD_REQUEST, "that time is in the past".to_string()))?;
+    let t = t.clamp(now() + min, now() + MAX_WAKE_SECS);
+    a.next_wake = Some(t);
+    a.wake_reason = cut(&r.reason, 200);
+    save(&g, &s.file);
+    drop(g);
+    bump(&s);
+    Ok(Json(json!({"at": t, "next": local_text(t, &tz)})))
+}
+
+async fn wake_now(State(s): State<S>, Path(id): Path<u64>) -> StatusCode {
+    match s.db.lock().await.agents.iter().find(|a| a.id == id) { None => return StatusCode::NOT_FOUND, Some(a) if !a.spec.autonomous => return StatusCode::BAD_REQUEST, _ => {} }
+    let s2 = s.clone();
+    tokio::spawn(async move { run_wake(s2, id).await });
+    StatusCode::ACCEPTED
+}
+
+/// One wake-up of a living agent: it gets its journal and what the user said since last time, then thinks and acts on its own.
+async fn run_wake(s: S, id: u64) {
+    if !s.rt.lock().await.jobs_running.insert(WAKE_BASE + id) { return; }
+    let Ok(_permit) = s.sem.acquire().await else { s.rt.lock().await.jobs_running.remove(&(WAKE_BASE + id)); return };
+    let t0 = now();
+    let pre = {
+        let mut g = s.db.lock().await;
+        let tz = g.settings.tz.clone();
+        match g.agents.iter_mut().find(|a| a.id == id) {
+            Some(a) if a.spec.autonomous && !a.running => {
+                a.wake_log.retain(|w| t0.saturating_sub(*w) < 86400);
+                let limit = a.spec.max_wakes.unwrap_or(24) as usize;
+                if a.wake_log.len() >= limit {
+                    let free = a.wake_log.first().copied().unwrap_or(t0) + 86400 + 1;
+                    a.next_wake = Some(free);
+                    Err(Some((a.spec.name.clone(), limit)))
+                } else {
+                    a.next_wake = None;   // so we can see whether the agent chooses its own next wake during this run
+                    Ok((a.spec.name.clone(), a.wakes, a.last_wake, tz))
+                }
+            }
+            Some(a) if a.running => { a.next_wake = Some(t0 + 60); Err(None) }
+            _ => Err(None),
+        }
+    };
+    let (name, wakes, last_wake, tz) = match pre {
+        Ok(x) => x,
+        Err(limit) => {
+            s.rt.lock().await.jobs_running.remove(&(WAKE_BASE + id));
+            if let Some((name, n)) = limit { act(&s, "system", Some(id), None, &format!("{name} is resting"), &format!("It already woke up {n} times in 24 hours, so it sleeps until the oldest wake-up is a day old. You can change the limit in the agent's settings.")).await; }
+            let g = s.db.lock().await; save(&g, &s.file);
+            return;
+        }
+    };
+    // what the user said to this agent since it was last awake
+    let mut said = vec![];
+    if let Ok(b) = std::fs::read_to_string(chat_path(&s, id)) {
+        for l in b.lines().rev().take(60) { if let Ok(m) = serde_json::from_str::<Msg>(l) { if m.role == "user" && m.at > last_wake { said.push(cut(&m.text, 600)); if said.len() >= 5 { break; } } } }
+    }
+    said.reverse();
+    let tzv = tz_of(&tz, "UTC");
+    let when_txt = chrono::Utc::now().with_timezone(&tzv).format("%A %Y-%m-%d %H:%M").to_string();
+    let msg = format!("You just woke up (wake number {}). It is {when_txt}. {}\n{}\nThink about your purpose and what is most useful to do now. Do it with your tools and make real progress. Then save your journal and choose when to wake next.",
+        wakes + 1,
+        if last_wake == 0 { "This is your very first wake: read your instructions carefully, decide your plan, write it in your journal, and begin.".to_string() } else { format!("You were last awake {} minutes ago.", (t0 - last_wake) / 60) },
+        if said.is_empty() { "The user has not written to you since.".to_string() } else { format!("The user wrote to you since then:\n- {}", said.join("\n- ")) });
+    let res = run_agent(&s, id, &msg, RunOpts { fresh: true, label: Some(format!("Woke up (wake {})", wakes + 1)), max_turns: Some(30), wake: true, check_cap: true, ..Default::default() }).await;
+    s.rt.lock().await.jobs_running.remove(&(WAKE_BASE + id));
+    let t = now();
+    let mut note: Option<String> = None;
+    let mut limited = false;
+    let (kind, text) = {
+        let mut g = s.db.lock().await;
+        let Some(a) = g.agents.iter_mut().find(|a| a.id == id) else { return };
+        let min = a.spec.wake_min.unwrap_or(15).max(1) * 60;
+        let (kind, text) = match res {
+            Ok(o) if o.ok => { a.wake_fails = 0; ("thought", o.text) }
+            Ok(o) => { a.wake_fails += 1; limited = o.limited; ("error", o.text) }
+            Err((StatusCode::CONFLICT, _)) => { a.next_wake = Some(t + 60); save(&g, &s.file); return; }
+            Err((_, m)) => ("system", m),
+        };
+        a.wakes += 1; a.last_wake = t0; a.wake_log.push(t0);
+        let chosen = a.next_wake.filter(|n| *n > t);
+        a.next_wake = Some(match (kind, chosen) { ("thought", Some(n)) => n.max(t + min), ("thought", None) => t + 3600.max(min), ("system", _) => t + 3600.max(min), _ => t + 1800.max(min) });
+        if limited { a.next_wake = Some(t + 1800); }
+        if a.wake_fails >= 3 { a.spec.autonomous = false; a.next_wake = None; note = Some(format!("{} could not finish 3 wake-ups in a row, so I turned its life off. Check its access and instructions, then switch it on again.", a.spec.name)); }
+        save(&g, &s.file);
+        (kind, text)
+    };
+    let title = match kind { "thought" => format!("{name} thought", ), "error" => format!("{name} had trouble"), _ => format!("{name} skipped a wake-up") };
+    act(&s, if kind == "thought" { "thought" } else if kind == "error" { "error" } else { "system" }, Some(id), None, &title, &text).await;
+    if limited { act(&s, "system", None, None, "Automations paused", "Claude's usage limit was reached. Living agents sleep for 30 minutes and then try again.").await; }
+    if let Some(n) = note { act(&s, "system", Some(id), None, "Agent switched off", &n).await; send_notification(&s, "Agent switched off", &n).await; }
 }
 
 // ---------------------------------------------------------------- settings
@@ -1296,6 +1469,9 @@ async fn main() {
         .route("/agents/{id}/run", post(run))
         .route("/agents/{id}/stop", post(stop))
         .route("/agents/{id}/remember", post(remember))
+        .route("/agents/{id}/journal", post(journal_put))
+        .route("/agents/{id}/wake", post(wake_set))
+        .route("/agents/{id}/wake-now", post(wake_now))
         .route("/jobs", get(jobs_list).post(jobs_create))
         .route("/jobs/{id}", axum::routing::put(jobs_update).delete(jobs_delete))
         .route("/jobs/{id}/enabled", post(jobs_enabled))

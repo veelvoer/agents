@@ -16,6 +16,17 @@ fn call(method: &str, path: &str, body: Option<Value>, timeout: u64) -> Result<V
 }
 
 fn tools() -> Value {
+    let mut v = base_tools();
+    if std::env::var("AGENT_AUTONOMOUS").as_deref() == Ok("1") {
+        v.as_array_mut().unwrap().extend([
+            json!({"name": "save_journal", "description": "Replace your journal: your private long-term memory that you read every time you wake up. Keep it organised and under 4000 characters: your purpose and plan, what you did and built, what you learned, and what comes next.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}),
+            json!({"name": "set_next_wake", "description": "Choose when you wake up next. Sleep long when nothing needs you. Use phrases such as 'in 45 minutes', 'in 6 hours', 'tomorrow 08:00', 'daily 08:00' (the next 08:00), or 'at 2026-12-01 09:00'. Times are in the user's time zone.", "inputSchema": {"type": "object", "properties": {"when": {"type": "string"}, "reason": {"type": "string", "description": "What you will do then"}}, "required": ["when"]}})
+        ]);
+    }
+    v
+}
+
+fn base_tools() -> Value {
     json!([
         {"name": "notify", "description": "Send the user a message right now (it goes to their phone and desktop app, and to Telegram if set up). Use it when you finish a long task, need their attention, or when they asked to be told something.",
          "inputSchema": {"type": "object", "properties": {"message": {"type": "string", "description": "The message. Keep it short and useful."}, "title": {"type": "string"}}, "required": ["message"]}},
@@ -53,6 +64,8 @@ fn run_tool(name: &str, a: &Value) -> Result<String, String> {
             if job == 0 { return Err("save_task_notes only works during a scheduled run.".into()); }
             call("POST", &format!("/jobs/{job}/notes"), Some(json!({"notes": s("notes")})), 30)?; Ok("Notes saved for the next run.".into())
         }
+        "save_journal" => { call("POST", &format!("/agents/{me}/journal"), Some(json!({"text": s("text")})), 30)?; Ok("Journal saved.".into()) }
+        "set_next_wake" => { let r = call("POST", &format!("/agents/{me}/wake"), Some(json!({"when": s("when"), "reason": s("reason")})), 30)?; Ok(format!("You will wake up next on {}.", r["next"].as_str().unwrap_or(""))) }
         "list_tasks" => {
             let r = call("GET", "/jobs", None, 30)?;
             let list = r.as_array().cloned().unwrap_or_default();

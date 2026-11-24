@@ -15,11 +15,11 @@ async function fetchActivity() {
     const d = await api('GET', '/activity?limit=80'); const prev = S.actLast;
     S.acts = d.items; S.actLast = d.last;
     if (localStorage.getItem('seen') === null) { S.seen = d.last; localStorage.setItem('seen', String(d.last)); }
-    if (prev && cfg.notify && !document.hasFocus()) for (const e of d.items.filter((x) => x.id > prev && x.kind !== 'system')) { try { new Notification(e.title || 'Agents', { body: e.body.slice(0, 200), tag: e.agent_id ? 'agent-' + e.agent_id : undefined }); } catch {} }
+    if (prev && cfg.notify && !document.hasFocus()) for (const e of d.items.filter((x) => x.id > prev && x.kind !== 'system' && x.kind !== 'thought')) { try { new Notification(e.title || 'Agents', { body: e.body.slice(0, 200), tag: e.agent_id ? 'agent-' + e.agent_id : undefined }); } catch {} }
     if (S.tab === 'activity') { renderActivity(); markRead(); } else updateBadge();
   } catch {}
 }
-const unread = () => (S.acts || []).filter((e) => e.id > S.seen && e.kind !== 'system').length;
+const unread = () => (S.acts || []).filter((e) => e.id > S.seen && e.kind !== 'system' && e.kind !== 'thought').length;
 function updateBadge() { const b = $('#nav [data-tab=activity]'); if (!b) return; $('.badge', b)?.remove(); const n = unread(); if (n) b.insertAdjacentHTML('beforeend', `<span class="badge" aria-label="${n} new">${n > 9 ? '9+' : n}</span>`); }
 function markRead() { if (S.actLast && S.seen !== S.actLast) { S.seen = S.actLast; localStorage.setItem('seen', String(S.seen)); updateBadge(); } }
 
@@ -107,6 +107,41 @@ function repeatDialog(agent, jobId) {
   draw(); document.body.appendChild(d); $('#jp', d)?.focus();
 }
 
+// ---- life: an agent that lives on its own ----
+const TIMING_WORDS = /\b(every (day|morning|evening|night|hour|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each (day|morning|evening|week)|daily|weekly|hourly|always|forever|24\/7|all the time|keep (on )?(working|going|developing)|live online)\b/i;
+const wakeText = (t) => { if (!t) return ''; const d = new Date(t * 1000), n = new Date(); const sameDay = d.toDateString() === n.toDateString(); return (sameDay ? 'today ' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' ') + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+const specOf = (agent, patch) => ({ ...agent.spec, mcp_config: agent.spec.mcp_config || null, workdir: agent.spec.workdir || null, ...patch });
+
+function lifeDialog(agent) {
+  const sp = agent.spec, alive = !!sp.autonomous;
+  const d = document.createElement('div'); d.className = 'scrim';
+  d.innerHTML = `<div class="dialog wide" role="dialog" aria-modal="true" aria-label="Life of ${esc(sp.name)}"><h2>${esc(sp.name)} ${alive ? 'is alive' : 'is not alive'}</h2>
+  <p class="tip" style="margin-top:-8px">${alive ? 'It wakes up by itself, thinks about its purpose (its instructions), does things with its tools, writes in its journal, and decides when to wake next. It is not waiting for you.' : 'Turn this on and the agent lives on the server by itself: it decides what to do and when, keeps working for days, and tells you only when it matters.'}</p>
+  <div class="setrow"><span class="grow"><b>Lives on its own</b></span><button class="toggle ${alive ? 'on' : ''}" id="l-on" role="switch" aria-checked="${alive}" aria-label="Lives on its own"></button></div>
+  ${alive ? `<div class="card" style="padding:12px 14px"><div class="small">${agent.status === 'running' ? 'Awake right now.' : agent.next_wake ? `Next wake-up: <b>${esc(wakeText(agent.next_wake))}</b>${agent.wake_reason ? ` · ${esc(agent.wake_reason)}` : ''}` : 'Waking up soon.'}</div><div class="small muted">${agent.wakes} wake-up${agent.wakes === 1 ? '' : 's'} so far${agent.last_wake ? ' · last ' + ago(agent.last_wake) : ''}</div></div>
+  <div class="field"><label class="label" for="l-j">Its journal (its own memory, it writes this itself, you can edit)</label><textarea id="l-j" style="min-height:140px" placeholder="Empty: it writes here after its first wake-up.">${esc(agent.journal || '')}</textarea></div>
+  <div class="row wrap"><div class="field grow"><label class="label" for="l-min">Wake at most every (minutes)</label><input id="l-min" type="number" min="1" value="${sp.wake_min ?? 15}"></div><div class="field grow"><label class="label" for="l-max">Most wake-ups per day</label><input id="l-max" type="number" min="1" max="200" value="${sp.max_wakes ?? 24}"></div></div>
+  <p class="tip">Every wake-up uses your Claude subscription. Fewer wake-ups and a daily cost limit (in the agent's settings) keep usage calm. What it may do on the server is set by the agent's access level (now: ${{ safe: 'look only', standard: 'edit files and browse', full: 'everything' }[sp.autonomy || 'safe']}). To let it run programs, such as tests or scripts, set its access to Everything.</p>` : `<p class="tip">Tip: write its purpose in the Instructions, for example <i>Explain something new about quantum computers every morning, starting from the basics</i>. It works out the schedule by itself.</p>`}
+  <p id="e" class="err small" role="alert"></p>
+  <div class="row wrap">${alive ? '<button class="ghost" id="l-now">Wake up now</button>' : ''}<span class="grow"></span><button class="ghost" id="l-cancel">Close</button>${alive ? '<button class="primary" id="l-save">Save</button>' : ''}</div></div>`;
+  d.onclick = (e) => { if (e.target === d) d.remove(); }; d.onkeydown = (e) => { if (e.key === 'Escape') d.remove(); };
+  document.body.appendChild(d);
+  $('#l-cancel', d).onclick = () => d.remove();
+  $('#l-on', d).onclick = async () => {
+    const on = !alive; const patch = { autonomous: on }; if (on && (sp.autonomy || 'safe') === 'safe') patch.autonomy = 'standard';
+    try { await api('PUT', `/agents/${agent.id}`, specOf(agent, patch)); d.remove(); toast(on ? `${sp.name} is alive now` : `${sp.name} stopped living on its own`); } catch (e) { $('#e', d).textContent = e.message; }
+  };
+  $('#l-now', d)?.addEventListener('click', async () => { try { await api('POST', `/agents/${agent.id}/wake-now`); toast('Waking up…'); d.remove(); } catch (e) { $('#e', d).textContent = e.message; } });
+  $('#l-save', d)?.addEventListener('click', async () => {
+    try {
+      await api('POST', `/agents/${agent.id}/journal`, { text: $('#l-j', d).value });
+      await api('PUT', `/agents/${agent.id}`, specOf(agent, { wake_min: Math.max(1, +$('#l-min', d).value || 15), max_wakes: Math.min(200, Math.max(1, +$('#l-max', d).value || 24)) }));
+      d.remove(); toast('Saved');
+    } catch (e) { $('#e', d).textContent = e.message; }
+  });
+  $('#l-j', d)?.focus();
+}
+
 // ---- activity view ----
 function activityView() {
   view().innerHTML = '<div class="page"><div class="col fade" style="max-width:820px" id="actcol"></div></div>';
@@ -114,14 +149,14 @@ function activityView() {
 }
 function renderActivity() {
   const col = $('#actcol'); if (!col) return; const flt = S.actFilter || 'all';
-  const keep = (e) => flt === 'all' || (flt === 'results' && e.kind === 'run') || (flt === 'messages' && e.kind === 'notify') || (flt === 'problems' && (e.kind === 'error' || e.kind === 'system'));
+  const keep = (e) => flt === 'all' || (flt === 'results' && e.kind === 'run') || (flt === 'messages' && e.kind === 'notify') || (flt === 'thoughts' && e.kind === 'thought') || (flt === 'problems' && (e.kind === 'error' || e.kind === 'system'));
   const items = (S.acts || []).filter(keep); let lastDay = '';
   const dayName = (t) => { const d = new Date(t * 1000), n = new Date(); const diff = Math.floor((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5); return diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }); };
-  const ic = { run: 'zap', notify: 'bell', error: 'alert', system: 'set' };
+  const ic = { run: 'zap', notify: 'bell', error: 'alert', system: 'set', thought: 'sparkle' };
   col.innerHTML = `<div class="head"><h1 class="grow">Activity</h1><span class="status-slot">${statusPill()}</span></div>
-  <div>${seg('a-filter', [['all', 'Everything'], ['results', 'Results'], ['messages', 'Messages'], ['problems', 'Problems']], flt)}</div>
+  <div>${seg('a-filter', [['all', 'Everything'], ['results', 'Results'], ['messages', 'Messages'], ['thoughts', 'Thoughts'], ['problems', 'Problems']], flt)}</div>
   ${!items.length ? `<div class="empty">${icon('bell')}<h3>Nothing here yet</h3><p class="small">When a task runs or an agent messages you, it shows up here.</p></div>` : items.map((e) => { const day = dayName(e.at); const head = day !== lastDay ? `<div class="sec">${esc(day)}</div>` : ''; lastDay = day;
-    return `${head}<div class="card act ${e.kind} ${e.id > S.seen && e.kind !== 'system' ? 'new' : ''}" tabindex="0" role="button" aria-expanded="false"><div class="row" style="align-items:flex-start"><span class="aic">${icon(ic[e.kind] || 'bot')}</span><div class="grow"><div class="row"><b class="grow ellip">${esc(e.title)}</b><span class="small muted">${new Date(e.at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div><div class="small clamp selectable" style="white-space:pre-wrap">${md(e.body)}</div></div></div></div>`; }).join('')}`;
+    return `${head}<div class="card act ${e.kind} ${e.id > S.seen && e.kind !== 'system' && e.kind !== 'thought' ? 'new' : ''}" tabindex="0" role="button" aria-expanded="false"><div class="row" style="align-items:flex-start"><span class="aic">${icon(ic[e.kind] || 'bot')}</span><div class="grow"><div class="row"><b class="grow ellip">${esc(e.title)}</b><span class="small muted">${new Date(e.at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div><div class="small clamp selectable" style="white-space:pre-wrap">${md(e.body)}</div></div></div></div>`; }).join('')}`;
   $$('#a-filter button', col).forEach((b) => (b.onclick = () => { S.actFilter = b.dataset.v; renderActivity(); }));
   $$('.act', col).forEach((el) => { const t = () => { const o = el.classList.toggle('open'); el.setAttribute('aria-expanded', o); }; el.onclick = (e) => { if (!window.getSelection().toString()) t(); }; el.onkeydown = (e) => { if (e.key === 'Enter') t(); }; });
 }

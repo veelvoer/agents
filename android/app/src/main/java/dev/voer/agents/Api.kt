@@ -9,8 +9,10 @@ class ApiError(message: String) : Exception(message)
 
 data class Usage(val input: Long, val output: Long, val cache: Long, val cost: Double) { val tokens get() = input + output }
 data class Spec(val name: String, val model: String, val prompt: String, val memory: String, val mcp: String, val subagents: Boolean,
-                val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "")
-data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>)
+                val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "",
+                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24)
+data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>,
+                 val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0)
 data class Msg(val role: String, val text: String, val at: Long)
 data class Page(val start: Int, val total: Int, val messages: List<Msg>)
 data class AgentList(val rev: Long, val agents: List<Agent>, val actLast: Long = 0, val paused: Boolean = false)
@@ -47,10 +49,12 @@ class Api(val url: String, val key: String) {
             val o = a.getJSONObject(it); val s = o.getJSONObject("spec"); val u = o.getJSONObject("usage")
             val dl = o.optJSONArray("daily") ?: JSONArray()
             Agent(o.getLong("id"), Spec(s.getString("name"), s.getString("model"), s.optString("prompt"), s.optString("memory"), if (s.isNull("mcp_config")) "" else s.optString("mcp_config"), s.optBoolean("subagents"),
-                s.optString("autonomy", "safe"), s.optBoolean("os_tools", true), if (s.isNull("daily_cap") || !s.has("daily_cap")) null else s.optDouble("daily_cap"), if (s.isNull("workdir")) "" else s.optString("workdir")),
+                s.optString("autonomy", "safe"), s.optBoolean("os_tools", true), if (s.isNull("daily_cap") || !s.has("daily_cap")) null else s.optDouble("daily_cap"), if (s.isNull("workdir")) "" else s.optString("workdir"),
+                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24)),
                 o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd")),
                 o.optBoolean("pinned"), o.optLong("last_active"), o.optInt("messages"),
-                (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } })
+                (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } },
+                o.optString("journal"), if (o.isNull("next_wake")) 0 else o.optLong("next_wake"), o.optString("wake_reason"), o.optLong("wakes"), o.optLong("last_wake"))
         }, d.optLong("act_last"), d.optBoolean("paused"))
     }
 
@@ -83,6 +87,8 @@ class Api(val url: String, val key: String) {
         return Page(d.getInt("start"), d.getInt("total"), (0 until a.length()).map { a.getJSONObject(it).let { m -> Msg(m.getString("role"), m.getString("text"), m.optLong("at")) } })
     }
 
+    fun saveJournal(id: Long, text: String) { call("POST", "/agents/$id/journal", JSONObject().put("text", text).toString()) }
+    fun wakeNow(id: Long) { call("POST", "/agents/$id/wake-now", "{}") }
     fun clear(id: Long) { call("DELETE", "/agents/$id/messages") }
     fun delete(id: Long) { call("DELETE", "/agents/$id") }
     fun run(id: Long, text: String) { call("POST", "/agents/$id/run", JSONObject().put("message", text).toString()) }
@@ -93,7 +99,7 @@ class Api(val url: String, val key: String) {
 
     private fun specJson(s: Spec) = JSONObject().put("name", s.name).put("model", s.model).put("prompt", s.prompt).put("memory", s.memory)
         .put("mcp_config", if (s.mcp.isBlank()) JSONObject.NULL else s.mcp.trim()).put("subagents", s.subagents)
-        .put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
+        .put("autonomous", s.autonomous).put("wake_min", s.wakeMin).put("max_wakes", s.maxWakes).put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
     fun save(id: Long?, s: Spec): Long = if (id == null) call("POST", "/agents", specJson(s)).trim().toLong() else { call("PUT", "/agents/$id", specJson(s)); id }
 }
 

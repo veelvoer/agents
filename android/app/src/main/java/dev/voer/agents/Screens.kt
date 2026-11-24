@@ -119,6 +119,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     var actLast by remember { mutableLongStateOf(0L) }
     var rev by remember { mutableLongStateOf(0L) }
     var repeatFor by remember { mutableStateOf<Long?>(null) }
+    var lifeFor by remember { mutableStateOf<Long?>(null) }
     val state = remember { ctx.getSharedPreferences("state", Context.MODE_PRIVATE) }
     var seen by remember { mutableLongStateOf(state.getLong("seen", -1L)) }
     val scope = rememberCoroutineScope()
@@ -189,7 +190,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
             Box(Modifier.weight(1f)) {
                 AnimatedContent(current?.id ?: -1L, transitionSpec = { (if (motion) slideInHorizontally(tween(240)) { it / 8 } + fadeIn(tween(200)) else fadeIn(snap())) togetherWith (if (motion) fadeOut(tween(120)) else fadeOut(snap())) }, label = "page") { id ->
-                    if (id != -1L && current != null) ChatScreen(api, current, models, repeatText((jobs ?: emptyList()).filter { it.agentId == current.id }), { open = null }, { editing = current to true }, { repeatFor = current.id }, { a -> scope.launch { try { withContext(Dispatchers.IO) { api.pin(a.id, !a.pinned) } } catch (_: ApiError) {} } })
+                    if (id != -1L && current != null) ChatScreen(api, current, models, repeatText((jobs ?: emptyList()).filter { it.agentId == current.id }), { open = null }, { editing = current to true }, { repeatFor = current.id }, { lifeFor = current.id }, { a -> scope.launch { try { withContext(Dispatchers.IO) { api.pin(a.id, !a.pinned) } } catch (_: ApiError) {} } })
                     else when (tab) {
                         0 -> AgentsTab(agents, err, models, jobs ?: emptyList(), paused, !(updateReady && !dismissed), { open = it }, { editing = null to true }, { scope.launch { try { withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("paused", false)) }; paused = false } catch (_: ApiError) {} } })
                         1 -> ActivityTab(acts, seen, err, !(updateReady && !dismissed))
@@ -201,6 +202,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
         }
     }
+    lifeFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> LifeSheet(ag, api, { lifeFor = null }, { lifeFor = null }) } }
     repeatFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> RepeatSheet(ag, (jobs ?: emptyList()).filter { it.agentId == id }, srv?.tz ?: java.util.TimeZone.getDefault().id, api, { repeatFor = null }, { repeatFor = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) } }
     if (editing != null) {
         val a = editing!!.first
@@ -247,7 +249,8 @@ private fun AgentCard(a: Agent, models: List<Pair<String, String>>, repeat: Stri
                 if (a.running) Text("working", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
             }
             Muted("${a.spec.model.modelName(models)} · ${fmtN(a.usage.tokens)} tokens · $${"%.3f".format(a.usage.cost)}" + if (a.lastActive > 0) " · ${ago(a.lastActive)}" else "")
-            if (repeat != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(L.Repeat, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary); Text(repeat, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
+            if (a.spec.autonomous) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(L.Sparkle, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary); Text("Alive" + (if (a.running) " · awake now" else if (a.nextWake > 0) " · next thought ${wakeText(a.nextWake)}" else ""), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
+            else if (repeat != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(L.Repeat, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary); Text(repeat, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }
@@ -266,7 +269,7 @@ fun md(t: String): AnnotatedString = buildAnnotatedString {
 }
 
 @Composable
-fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, repeat: String?, onBack: () -> Unit, onEdit: () -> Unit, onRepeat: () -> Unit, onPin: (Agent) -> Unit) {
+fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, repeat: String?, onBack: () -> Unit, onEdit: () -> Unit, onRepeat: () -> Unit, onLife: () -> Unit, onPin: (Agent) -> Unit) {
     val scope = rememberCoroutineScope()
     val clip = LocalClipboardManager.current
     var msgs by remember { mutableStateOf<List<Msg>>(emptyList()) }
@@ -295,6 +298,7 @@ fun ChatScreen(api: Api, agent: Agent, models: List<Pair<String, String>>, repea
                 Text(agent.spec.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Muted("${agent.spec.model.modelName(models)} · ${fmtN(agent.usage.tokens)} tokens · $${"%.3f".format(agent.usage.cost)}")
             }
+            IconBtn(L.Sparkle, if (agent.spec.autonomous) "Alive: ${wakeText(agent.nextWake)}" else "Let this agent live on its own", onLife, tint = if (agent.spec.autonomous) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             IconBtn(L.Repeat, if (repeat != null) "Repeat settings: $repeat" else "Make this agent repeat", onRepeat, tint = if (repeat != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             IconBtn(L.Pin, if (agent.pinned) "Unpin" else "Pin to top", { onPin(agent) }, tint = if (agent.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             IconBtn(L.Edit, "Edit agent", onEdit); IconBtn(L.Trash, "Clear chat", { confirmClear = true })
@@ -425,10 +429,11 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
     var custom by remember { mutableStateOf(if (s != null && models.none { it.first == s.model }) s.model else "") }
     var prompt by remember { mutableStateOf(s?.prompt ?: "") }; var memory by remember { mutableStateOf(s?.memory ?: "") }
     var mcp by remember { mutableStateOf(s?.mcp ?: "") }; var subs by remember { mutableStateOf(s?.subagents ?: false) }
+    var alive by remember { mutableStateOf(s?.autonomous ?: false) }
     var autonomy by remember { mutableStateOf(s?.autonomy ?: "safe") }; var osTools by remember { mutableStateOf(s?.osTools ?: true) }
     var cap by remember { mutableStateOf(s?.dailyCap?.toString() ?: "") }; var workdir by remember { mutableStateOf(s?.workdir ?: "") }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
-    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir)
+    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir, alive, s?.wakeMin ?: 15, s?.maxWakes ?: 24)
     ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (agent == null) "New agent" else "Edit agent", style = MaterialTheme.typography.headlineMedium)
@@ -443,6 +448,9 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             Muted("Describe the agent's job here. To make it work by itself, for example every morning, save it and then press Repeat in its chat.")
             OutlinedTextField(memory, { memory = it }, Modifier.fillMaxWidth(), label = { Text("Memory") }, minLines = 2, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(mcp, { mcp = it }, Modifier.fillMaxWidth(), label = { Text("Tools (MCP file on the server)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Lives on its own", fontWeight = FontWeight.SemiBold); Muted("Wakes up by itself, thinks, acts and decides when to wake next, all the time") }
+                Switch(alive, { on -> alive = on; if (on && autonomy == "safe") autonomy = "standard" }) }
+            if (!alive && timingHint(prompt)) Text("These instructions mention doing things over time. Turn on Lives on its own and the agent works out the schedule by itself.", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
             Label("What it may do on the server")
             Segmented(listOf("safe" to "Look only", "standard" to "Edit and browse", "full" to "Everything"), autonomy) { autonomy = it }
             Muted(when (autonomy) { "safe" -> "Reads files and answers. Nothing is changed."; "standard" -> "Can edit files in its folder and search the web."; else -> "Can run any command on the server without asking. Only for agents you trust." })

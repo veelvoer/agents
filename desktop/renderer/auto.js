@@ -193,7 +193,11 @@ function renderActivity() {
 function autoSettingsHtml() {
   const v = S.srv; if (!v) return '<div class="card"><p class="muted small">Loading server settings…</p></div>';
   const tg = v.telegram;
-  return `<div class="card stack"><div class="label">Repeating agents</div>
+  return `<div class="card stack"><div class="label">Who pays</div>
+  <div class="setrow"><span class="grow">Agents use by default</span>${seg('x-bill', [['subscription', 'My Claude subscription'], ['api', 'My API key']], v.default_billing)}</div>
+  ${v.api_key_set ? `<div class="setrow"><span class="grow">API key saved, ending <span class="kbd">${esc(v.api_key_tail)}</span></span><button class="ghost sm" id="x-ktest">Test</button><button class="ghost sm" id="x-kdel">Remove</button></div>` : `<div class="field"><label class="label" for="x-key">Your Anthropic API key</label><div class="row"><input id="x-key" type="password" placeholder="sk-ant-…" autocomplete="off"><button class="primary sm" id="x-ksave">Save and test</button></div></div>`}
+  <p class="tip">The subscription is a flat price with shared limits. An API key is pay as you go: every run costs real money, with no subscription limits. The key stays on your server and is never shown again. You can also choose for each agent separately in its settings.</p></div>
+  <div class="card stack"><div class="label">Repeating agents</div>
   <div class="setrow"><span class="grow">Let agents repeat by themselves</span><button class="toggle ${v.paused ? '' : 'on'}" id="x-run" role="switch" aria-checked="${!v.paused}" aria-label="Let agents repeat by themselves"></button></div>
   <div class="setrow"><span class="grow">At the same time, at most</span>${seg('x-par', [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']], String(v.max_parallel))}</div>
   <p class="tip" style="margin-top:-6px">Each run uses your Claude subscription. A lower number keeps usage calm.</p>
@@ -210,6 +214,11 @@ function autoSettingsHtml() {
 function bindAutoSettings() {
   const put = async (body, msg) => { try { S.srv = await api('PUT', '/settings', body); S.paused = S.srv.paused; if (msg) toast(msg); settingsView(); } catch (e) { toast(e.message); } };
   const q = (s) => $(s);
+  $$('#x-bill button').forEach((b) => (b.onclick = () => { if (b.dataset.v === 'api' && !S.srv.api_key_set) { toast('Add your API key first.'); return; } put({ default_billing: b.dataset.v }, 'Saved'); }));
+  const keyTest = async () => { try { const r = await api('POST', '/settings/api-key/test'); toast(r.ok ? 'The key works.' : r.error); return r.ok; } catch (e) { toast(e.message); return false; } };
+  q('#x-ksave') && (q('#x-ksave').onclick = async () => { const k = q('#x-key').value.trim(); if (!k) return; try { S.srv = await api('PUT', '/settings', { api_key: k }); S.paused = S.srv.paused; const ok = await keyTest(); if (!ok) { S.srv = await api('PUT', '/settings', { api_key: '' }); } settingsView(); } catch (e) { toast(e.message); } });
+  q('#x-ktest') && (q('#x-ktest').onclick = keyTest);
+  q('#x-kdel') && (q('#x-kdel').onclick = () => confirmBox('Remove the API key?', 'Agents set to pay with it will stop until you add a key again or switch them to your subscription.', 'Remove', async () => { S.srv = await api('PUT', '/settings', { api_key: '' }); settingsView(); }));
   q('#x-run') && (q('#x-run').onclick = () => put({ paused: !S.srv.paused }, S.srv.paused ? 'Automations running' : 'Automations paused'));
   $$('#x-par button').forEach((b) => (b.onclick = () => put({ max_parallel: +b.dataset.v }, 'Saved')));
   q('#x-tz') && (q('#x-tz').onchange = (e) => put({ tz: e.target.value }, 'Time zone saved'));

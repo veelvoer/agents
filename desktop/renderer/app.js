@@ -201,7 +201,7 @@ function agentsView() {
 function itemHtml(a) {
   const run = a.status === 'running';
   return `<div class="item ${S.sel === a.id ? 'on' : ''}" role="button" tabindex="0" draggable="${!S.q}" data-id="${a.id}"><div class="t"><span class="dot ${a.status}"></span><span class="ellip grow">${esc(a.spec.name)}</span>${a.pinned ? `<span class="pin" aria-label="Pinned">${icon('pin')}</span>` : ''}${run ? '<span class="small muted">working</span>' : ''}</div>
-  <div class="small muted">${esc(modelName(a.spec.model))} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>${(() => { if (a.spec.autonomous) return `<div class="small repeatline">${icon('sparkle')}<span>Alive${a.status === 'running' ? ' · awake now' : a.next_wake ? ' · next thought ' + wakeText(a.next_wake) : ''}</span></div>`; const r = repeatInfo(a); return r ? `<div class="small ${r.on ? '' : 'muted'} repeatline">${icon('repeat')}<span>${esc(r.text)}</span></div>` : ''; })()}
+  <div class="small muted">${esc(modelName(a.spec.model))}${(a.spec.billing === 'api' || (!a.spec.billing && S.srv && S.srv.default_billing === 'api')) ? ' · API key' : ''} · ${fmtN(tokens(a.usage))} tokens · $${a.usage.cost_usd.toFixed(3)}${a.last_active ? ' · ' + ago(a.last_active) : ''}</div>${(() => { if (a.spec.autonomous) return `<div class="small repeatline">${icon('sparkle')}<span>Alive${a.status === 'running' ? ' · awake now' : a.next_wake ? ' · next thought ' + wakeText(a.next_wake) : ''}</span></div>`; const r = repeatInfo(a); return r ? `<div class="small ${r.on ? '' : 'muted'} repeatline">${icon('repeat')}<span>${esc(r.text)}</span></div>` : ''; })()}
   <div class="act"><button class="ic" data-pin="${a.id}" aria-label="${a.pinned ? 'Unpin' : 'Pin'} ${esc(a.spec.name)}" title="${a.pinned ? 'Unpin' : 'Pin to top'}">${icon('pin')}</button></div></div>`;
 }
 function renderSide() {
@@ -283,7 +283,7 @@ function confirmBox(title, text, ok, fn) {
 }
 
 function editor(a) {
-  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, browser: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false, browser: false };
+  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, browser: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false, browser: false, billing: null };
   const d = document.createElement('div'); d.className = 'scrim';
   const known = () => S.models.some((m) => m[0] === sp.model);
   const draw = () => {
@@ -296,6 +296,7 @@ function editor(a) {
     <div class="field"><label class="label" for="mcp">Tools (MCP file on the server)</label><input id="mcp" placeholder="/home/me/browser-mcp.json" value="${esc(sp.mcp_config)}"></div>
     <div class="row" style="min-height:40px"><span class="grow"><b>Lives on its own</b> <span class="small muted">: wakes up by itself, thinks, acts and decides when to wake next, all the time</span></span><button class="toggle ${sp.autonomous ? 'on' : ''}" id="e-life" role="switch" aria-checked="${!!sp.autonomous}" aria-label="Lives on its own"></button></div>
     ${!sp.autonomous && TIMING_WORDS.test(sp.prompt) ? '<p class="tip" style="color:var(--clay)">These instructions mention doing things over time. Turn on Lives on its own and the agent works out the schedule by itself.</p>' : ''}
+    <div class="setrow"><span class="grow">Pay with</span>${seg('e-bill', [['', 'Server default'], ['subscription', 'Subscription'], ['api', 'API key']], sp.billing || '')}</div>
     <div class="row" style="min-height:40px"><span class="grow"><b>Can use a web browser</b> <span class="small muted">: opens pages, clicks, types, logs in, and keeps its own cookies</span></span><button class="toggle ${sp.browser ? 'on' : ''}" id="e-browser" role="switch" aria-checked="${!!sp.browser}" aria-label="Can use a web browser"></button></div>
     <div class="field"><span class="label">What it may do on the server</span>${seg('e-auto', [['safe', 'Look only'], ['standard', 'Edit files and browse'], ['full', 'Everything']], sp.autonomy)}<p class="tip">${{ safe: 'Reads files and answers. Nothing is changed.', standard: 'Can edit files in its folder and search the web.', full: 'Can run any command on the server without asking. Only for agents you trust.' }[sp.autonomy]}</p></div>
     <div class="row" style="min-height:40px"><span class="grow">Agentic tools: message me, schedule tasks, remember, ask other agents</span><button class="toggle ${sp.os_tools ? 'on' : ''}" id="e-os" role="switch" aria-checked="${sp.os_tools}" aria-label="Agentic tools"></button></div>
@@ -307,11 +308,12 @@ function editor(a) {
     $$('[data-m]', d).forEach((b) => (b.onclick = () => { keep(); sp.model = b.dataset.m; $('#cm', d) && ($('#cm', d).value = ''); draw(); }));
     $$('#e-auto button', d).forEach((b) => (b.onclick = () => { keep(); sp.autonomy = b.dataset.v; draw(); }));
     $('#e-life', d).onclick = () => { keep(); sp.autonomous = !sp.autonomous; if (sp.autonomous && sp.autonomy === 'safe') sp.autonomy = 'standard'; draw(); };
+    $$('#e-bill button', d).forEach((b) => (b.onclick = () => { keep(); sp.billing = b.dataset.v || null; draw(); }));
     $('#e-browser', d).onclick = () => { keep(); sp.browser = !sp.browser; draw(); };
     $('#e-os', d).onclick = () => { keep(); sp.os_tools = !sp.os_tools; draw(); };
     $('#sub', d).onclick = () => { keep(); sp.subagents = !sp.subagents; draw(); };
     $('#cancel', d).onclick = () => d.remove();
-    const body = () => ({ ...sp, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null, workdir: sp.workdir.trim() || null });
+    const body = () => ({ ...sp, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null, workdir: sp.workdir.trim() || null, billing: sp.billing || null });
     $('#save', d).onclick = async () => {
       keep(); if (!sp.name.trim()) { $('#e', d).textContent = 'Give the agent a name.'; return; }
       $('#save', d).disabled = true;
@@ -332,6 +334,7 @@ function usageView() {
   const days = []; for (let i = 13; i >= 0; i--) { const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10); days.push(d); }
   const per = Object.fromEntries(days.map((d) => [d, 0])); for (const a of l) for (const [d, v] of a.daily || []) if (d in per) per[d] += v.cost;
   const dmax = Math.max(1e-6, ...Object.values(per)), week = days.slice(-7).reduce((s, d) => s + per[d], 0);
+  const api$ = l.reduce((s, a) => s + (a.usage.api_cost || 0), 0);
   const max = Math.max(1e-6, ...l.map((a) => a.usage.cost_usd)), sorted = [...l].sort((a, b) => b.usage.cost_usd - a.usage.cost_usd);
   const models = {}; for (const a of l) models[a.spec.model] = (models[a.spec.model] || 0) + a.usage.cost_usd;
   const mm = Math.max(1e-6, ...Object.values(models));
@@ -339,6 +342,7 @@ function usageView() {
   <div class="card"><div class="row wrap"><div class="grow"><div class="label">Estimated cost</div><div class="big" style="margin-top:8px">$${cost.toFixed(2)}</div></div><div><div class="label">Last 7 days</div><div class="kpi"><div class="v">$${week.toFixed(2)}</div></div></div></div>
   <div class="chart" role="img" aria-label="Cost per day, last 14 days">${days.map((d) => `<div title="${d}: $${per[d].toFixed(3)}"><i class="${per[d] ? '' : 'zero'}" style="height:${per[d] ? Math.max(3, per[d] / dmax * 100) : 2}%"></i><span>${d.slice(8)}</span></div>`).join('')}</div>
   <p class="muted small" style="margin-top:10px">Counted from your Claude subscription runs. It shows how much you used, not a bill.</p></div>
+  ${api$ > 0 ? `<div class="card"><div class="row"><div class="grow"><div class="label">Paid with your API key</div><div class="small muted">Real money, billed by Anthropic to your key</div></div><div class="kpi"><div class="v">$${api$.toFixed(2)}</div></div></div></div>` : ''}
   <div class="g3"><div class="card kpi"><div class="label">Working now</div><div class="v">${act}</div><span class="small muted">of ${l.length} agents</span></div>
   <div class="card kpi"><div class="label">Tokens</div><div class="v">${fmtN(tok)}</div><span class="small muted">input and output</span></div>
   <div class="card kpi"><div class="label">Read from cache</div><div class="v">${fmtN(cache)}</div><span class="small muted">tokens reused cheaply</span></div></div>

@@ -85,13 +85,16 @@ struct Spec {
     /// Most wake-ups per 24 hours (default 24).
     #[serde(default)]
     max_wakes: Option<u32>,
+    /// Who pays for this agent's runs: "subscription" (your Claude login on the server), "api" (your Anthropic API key), or unset = the server default.
+    #[serde(default)]
+    billing: Option<String>,
     /// The agent gets a real headless web browser (it can open pages, click, type, log in, keep its own cookies).
     #[serde(default)]
     browser: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
-struct Usage { input_tokens: u64, output_tokens: u64, cache_read_tokens: u64, cost_usd: f64 }
+struct Usage { input_tokens: u64, output_tokens: u64, cache_read_tokens: u64, cost_usd: f64, #[serde(default)] api_cost: f64 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Day { cost: f64, tokens: u64 }
@@ -220,9 +223,15 @@ struct Settings {
     global_memory: String,
     #[serde(default)]
     notify: NotifyCfg,
+    /// Your Anthropic API key (pay as you go). Stays on this server; the apps only see whether it is set and its last 4 characters.
+    #[serde(default)]
+    api_key: String,
+    /// "subscription" or "api": what agents use when they do not choose themselves.
+    #[serde(default)]
+    default_billing: String,
 }
 impl Default for Settings {
-    fn default() -> Self { Settings { paused: false, pause_until: 0, max_parallel: 2, tz: std::env::var("TZ").unwrap_or_else(|_| "UTC".into()), global_memory: String::new(), notify: NotifyCfg::default() } }
+    fn default() -> Self { Settings { paused: false, pause_until: 0, max_parallel: 2, tz: std::env::var("TZ").unwrap_or_else(|_| "UTC".into()), global_memory: String::new(), notify: NotifyCfg::default(), api_key: String::new(), default_billing: String::new() } }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -290,8 +299,10 @@ fn data_dir(s: &S) -> PathBuf { s.file.parent().map(|p| p.to_path_buf()).filter(
 
 fn save(db: &Db, file: &PathBuf) {
     if let Ok(j) = serde_json::to_vec(db) {
-        let tmp = file.with_extension("tmp");
-        if std::fs::write(&tmp, j).is_ok() { let _ = std::fs::rename(tmp, file); }
+        use std::os::unix::fs::OpenOptionsExt;
+        let tmp = file.with_extension("tmp");   // the file may hold the API key: only its owner may read it
+        let ok = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).and_then(|mut f| f.write_all(&j)).is_ok();
+        if ok { let _ = std::fs::rename(tmp, file); }
     }
 }
 
@@ -708,12 +719,14 @@ fn looks_limited(t: &str) -> bool {
 }
 
 async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (StatusCode, String)> {
-    let (spec, session, name, settings, cancel, job_notes, journal) = {
+    let (spec, session, name, settings, cancel, job_notes, journal, api_key) = {
         let mut g = s.db.lock().await;
         let settings = g.settings.clone();
         let job_notes = o.job_id.and_then(|j| g.jobs.iter().find(|x| x.id == j)).map(|j| j.notes.clone()).unwrap_or_default();
         let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
         if a.running { return Err((StatusCode::CONFLICT, "this agent is still working on something else".into())); }
+        let use_api = match a.spec.billing.as_deref() { Some("api") => true, Some("subscription") => false, _ => settings.default_billing == "api" };
+        let api_key = if use_api { if settings.api_key.is_empty() { return Err((StatusCode::BAD_REQUEST, format!("{} is set to pay with an API key, but no key is saved. Add it in Settings or switch the agent to your subscription.", a.spec.name))); } Some(settings.api_key.clone()) } else { None };
         if o.check_cap {
             if let Some(cap) = a.spec.daily_cap.filter(|c| *c > 0.0) {
                 let used = a.daily.get(&day_of(now())).map_or(0.0, |d| d.cost);
@@ -724,7 +737,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         a.last_active = now();
         let cancel = Arc::new(Notify::new());
         s.rt.lock().await.cancel.insert(id, cancel.clone());
-        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes, a.journal.clone())
+        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes, a.journal.clone(), api_key)
     };
     if let Some(l) = &o.label { append_msg(s, id, "auto", l).await; } else { append_msg(s, id, "user", msg).await; }
     bump(s);
@@ -774,6 +787,8 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         if let Some(m) = spec.mcp_config.as_deref().filter(|m| !m.is_empty()) { c.args(["--mcp-config", m]); }
         if let Some(t) = o.max_turns { c.args(["--max-turns", &t.to_string()]); }
         if let Some(x) = resume { c.args(["--resume", x]); }
+        // The key is only given to the process when this agent pays with it. A subscription run never sees it (so it can never be charged by accident).
+        match &api_key { Some(k) => { c.env("ANTHROPIC_API_KEY", k).arg("--bare"); } None => { c.env_remove("ANTHROPIC_API_KEY"); } }
         c.current_dir(&workdir).kill_on_drop(true);
         c
     };
@@ -839,6 +854,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         a.usage.output_tokens += ou;
         a.usage.cache_read_tokens += u["cache_read_input_tokens"].as_u64().unwrap_or(0);
         a.usage.cost_usd += cost;
+        if api_key.is_some() { a.usage.api_cost += cost; }
         let d = a.daily.entry(day_of(now())).or_default();
         d.cost += cost;
         d.tokens += i + ou;
@@ -864,7 +880,12 @@ async fn run(State(s): State<S>, Path(id): Path<u64>, Json(req): Json<RunReq>) -
         }
     }
     let s2 = s.clone();
-    tokio::spawn(async move { let _ = run_agent(&s2, id, &req.message, RunOpts::default()).await; });
+    tokio::spawn(async move {
+        // a refusal before the run even starts (for example: no API key saved) must still show up in the chat
+        if let Err((code, why)) = run_agent(&s2, id, &req.message, RunOpts::default()).await {
+            if code != StatusCode::CONFLICT { append_msg(&s2, id, "user", &req.message).await; append_msg(&s2, id, "error", &why).await; bump(&s2); }
+        }
+    });
     (StatusCode::ACCEPTED, Json(json!({"started": true}))).into_response()
 }
 
@@ -1184,7 +1205,9 @@ async fn scheduler(s: S) {
 const SCHEDULE_PROMPT: &str = "You turn a person's description of WHEN something should happen into a schedule. Reply with ONLY one JSON object, nothing else.\nIt is now {now} (time zone {tz}). Use that time zone.\nFormats:\n{\"type\":\"cron\",\"crons\":[\"m h dom mon dow\"],\"human\":\"short plain English\"}  - each cron has 5 fields: minute hour day-of-month month day-of-week (0=Sunday, 1=Monday ... 6=Saturday). Lists (1,4), ranges (1-5) and steps (*/15) are allowed; L in day-of-month means the last day of the month; 5#2 in day-of-week means the second Friday. Give several crons when different days have different times (the schedule runs at all of them).\n{\"type\":\"every\",\"minutes\":N,\"human\":\"...\"}  - a plain repeat every N minutes.\n{\"type\":\"once\",\"at\":\"YYYY-MM-DD HH:MM\",\"human\":\"...\"}  - exactly one moment in the future.\n{\"type\":\"error\",\"message\":\"what is unclear\"}  - when there is no usable timing in the text.\nIf the text contains other things besides the timing, only use the timing. If no time of day is given, use 09:00. human must describe exactly what you built, for example \"Every Monday and Thursday at 07:30\".\nText: \"\"\"{text}\"\"\"";
 
 async fn ai_json(s: &S, prompt: &str) -> Result<Value, String> {
+    let key = { let g = s.db.lock().await; if g.settings.default_billing == "api" && !g.settings.api_key.is_empty() { Some(g.settings.api_key.clone()) } else { None } };
     let mut c = Command::new("claude");
+    match &key { Some(k) => { c.env("ANTHROPIC_API_KEY", k); } None => { c.env_remove("ANTHROPIC_API_KEY"); } }
     c.args(["-p", prompt, "--output-format", "json", "--model", "claude-haiku-4-5-20251001", "--max-turns", "1"]).current_dir(data_dir(s)).kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(90), c.output()).await.map_err(|_| "Understanding the schedule took too long. Try again.".to_string())?.map_err(|e| format!("Couldn't start claude on the server: {e}"))?;
     let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| "Claude gave no answer. Is Claude Code logged in on the server?".to_string())?;
@@ -1378,6 +1401,8 @@ fn settings_json(st: &Settings) -> Value {
         "telegram": {"token_set": !st.notify.telegram_token.is_empty(), "paired": st.notify.telegram_chat.is_some(), "pair_code": st.notify.telegram_pair},
         "ntfy": {"server": st.notify.ntfy_server, "topic": st.notify.ntfy_topic},
         "webhook": {"set": !st.notify.webhook_url.is_empty()},
+        "api_key_set": !st.api_key.is_empty(), "api_key_tail": st.api_key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<String>(),
+        "default_billing": if st.default_billing == "api" { "api" } else { "subscription" },
     })
 }
 
@@ -1399,6 +1424,8 @@ async fn settings_put(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<V
         if let Some(v) = r["ntfy_server"].as_str() { st.notify.ntfy_server = v.trim().into(); }
         if let Some(v) = r["ntfy_topic"].as_str() { st.notify.ntfy_topic = v.trim().into(); }
         if let Some(v) = r["webhook_url"].as_str() { st.notify.webhook_url = v.trim().into(); }
+        if let Some(v) = r["api_key"].as_str() { let v = v.trim(); if !v.is_empty() && !v.starts_with("sk-") { return Err((StatusCode::BAD_REQUEST, "That does not look like an Anthropic API key (it starts with sk-ant-).".into())); } st.api_key = v.into(); if v.is_empty() && st.default_billing == "api" { st.default_billing = String::new(); } }
+        if let Some(v) = r["default_billing"].as_str() { if v == "api" && st.api_key.is_empty() { return Err((StatusCode::BAD_REQUEST, "Add your API key first.".into())); } st.default_billing = if v == "api" { "api".into() } else { String::new() }; }
         if let Some(v) = r["telegram_token"].as_str() {
             let v = v.trim();
             if v != st.notify.telegram_token { st.notify.telegram_token = v.into(); st.notify.telegram_chat = None; st.notify.telegram_pair = None; restart_tg = true; }
@@ -1412,6 +1439,19 @@ async fn settings_put(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<V
     if restart_tg { start_telegram(&s).await; }
     bump(&s);
     Ok(Json(out))
+}
+
+/// Asks Anthropic for one token to see whether the saved key works (it costs a tiny fraction of a cent).
+async fn api_key_test(State(s): State<S>) -> Json<Value> {
+    let key = s.db.lock().await.settings.api_key.clone();
+    if key.is_empty() { return Json(json!({"ok": false, "error": "No API key saved."})); }
+    let body = json!({"model": "claude-haiku-4-5-20251001", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]});
+    match Req::new("POST", "https://api.anthropic.com/v1/messages").header("x-api-key", key).header("anthropic-version", "2023-06-01").json(&body).timeout(30).send().await {
+        Ok((200, _)) => Json(json!({"ok": true})),
+        Ok((401, _)) => Json(json!({"ok": false, "error": "Anthropic refused this key. Check that you copied all of it."})),
+        Ok((code, t)) => { let m = serde_json::from_str::<Value>(&t).ok().and_then(|v| v["error"]["message"].as_str().map(String::from)).unwrap_or_default(); Json(json!({"ok": false, "error": format!("Anthropic answered {code}. {}", cut(&m, 160))})) }
+        Err(e) => Json(json!({"ok": false, "error": format!("Could not reach Anthropic: {e}")})),
+    }
 }
 
 async fn notify_test(State(s): State<S>) -> Json<Value> {
@@ -1602,6 +1642,7 @@ async fn main() {
         .route("/notify", post(notify))
         .route("/settings", get(settings_get).put(settings_put))
         .route("/settings/test", post(notify_test))
+        .route("/settings/api-key/test", post(api_key_test))
         .route("/settings/telegram/pair", post(telegram_pair))
         .route("/settings/telegram", axum::routing::delete(telegram_unlink))
         .route("/admin/update", post(self_update))

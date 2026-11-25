@@ -221,6 +221,23 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
     var tgToken by remember { mutableStateOf("") }
     var ntfyS by remember(srv.ntfyServer) { mutableStateOf(srv.ntfyServer) }; var ntfyT by remember(srv.ntfyTopic) { mutableStateOf(srv.ntfyTopic) }
     var hook by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    SectionCard {
+        Label("Who pays")
+        Text("Agents use by default"); Segmented(listOf("subscription" to "My Claude subscription", "api" to "My API key"), srv.defaultBilling) { v -> if (v == "api" && !srv.apiKeySet) note = "Add your API key first." else put(JSONObject().put("default_billing", v), "Saved") }
+        if (srv.apiKeySet) {
+            Text("API key saved, ending ${srv.apiKeyTail}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ scope.launch { note = try { withContext(Dispatchers.IO) { api.testApiKey() }.ifEmpty { "The key works." } } catch (e: ApiError) { e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Test") }
+                OutlinedButton({ put(JSONObject().put("api_key", ""), "Key removed") }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Remove") }
+            }
+        } else {
+            OutlinedTextField(apiKey, { apiKey = it }, Modifier.fillMaxWidth(), label = { Text("Your Anthropic API key") }, placeholder = { Text("sk-ant-…") }, singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), shape = RoundedCornerShape(12.dp))
+            Button({ if (apiKey.isNotBlank()) scope.launch { try { onSrv(withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("api_key", apiKey.trim())) }); val bad = withContext(Dispatchers.IO) { api.testApiKey() }
+                if (bad.isNotEmpty()) { onSrv(withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("api_key", "")) }); note = bad } else { note = "The key works and is saved."; apiKey = "" } } catch (e: ApiError) { note = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save and test") }
+        }
+        Muted("The subscription is a flat price with shared limits. An API key is pay as you go: every run costs real money, with no subscription limits. The key stays on your server and is never shown again. You can also choose for each agent separately in its settings.")
+    }
     SectionCard {
         Label("Repeating agents")
         Row(verticalAlignment = Alignment.CenterVertically) { Text("Let agents repeat by themselves", Modifier.weight(1f)); Switch(!srv.paused, { put(JSONObject().put("paused", !it)) }) }

@@ -7,10 +7,10 @@ import org.json.JSONObject
 
 class ApiError(message: String) : Exception(message)
 
-data class Usage(val input: Long, val output: Long, val cache: Long, val cost: Double) { val tokens get() = input + output }
+data class Usage(val input: Long, val output: Long, val cache: Long, val cost: Double, val apiCost: Double = 0.0) { val tokens get() = input + output }
 data class Spec(val name: String, val model: String, val prompt: String, val memory: String, val mcp: String, val subagents: Boolean,
                 val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "",
-                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24, val browser: Boolean = false)
+                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24, val browser: Boolean = false, val billing: String = "")
 data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>,
                  val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0)
 data class Msg(val role: String, val text: String, val at: Long)
@@ -20,7 +20,7 @@ data class AgentList(val rev: Long, val agents: List<Agent>, val actLast: Long =
 data class Job(val id: Long, val agentId: Long, val agent: String, val name: String, val prompt: String, val human: String, val enabled: Boolean, val fresh: Boolean, val notify: String,
                val next: String?, val lastRun: Long, val lastStatus: String?, val lastText: String, val runs: Int, val cost: Double, val hook: String?, val running: Boolean, val schedule: JSONObject, val notes: String = "")
 data class Act(val id: Long, val at: Long, val kind: String, val agentId: Long, val jobId: Long, val title: String, val body: String)
-data class SrvSettings(val paused: Boolean, val maxParallel: Int, val tz: String, val memory: String, val tgToken: Boolean, val tgPaired: Boolean, val tgCode: String?, val ntfyServer: String, val ntfyTopic: String, val webhook: Boolean)
+data class SrvSettings(val paused: Boolean, val maxParallel: Int, val tz: String, val memory: String, val tgToken: Boolean, val tgPaired: Boolean, val tgCode: String?, val ntfyServer: String, val ntfyTopic: String, val webhook: Boolean, val apiKeySet: Boolean = false, val apiKeyTail: String = "", val defaultBilling: String = "subscription")
 
 class Api(val url: String, val key: String) {
     private fun call(method: String, path: String, body: String? = null, timeoutMs: Int = 20_000): String {
@@ -51,8 +51,8 @@ class Api(val url: String, val key: String) {
             val dl = o.optJSONArray("daily") ?: JSONArray()
             Agent(o.getLong("id"), Spec(s.getString("name"), s.getString("model"), s.optString("prompt"), s.optString("memory"), if (s.isNull("mcp_config")) "" else s.optString("mcp_config"), s.optBoolean("subagents"),
                 s.optString("autonomy", "safe"), s.optBoolean("os_tools", true), if (s.isNull("daily_cap") || !s.has("daily_cap")) null else s.optDouble("daily_cap"), if (s.isNull("workdir")) "" else s.optString("workdir"),
-                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24), s.optBoolean("browser")),
-                o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd")),
+                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24), s.optBoolean("browser"), if (s.isNull("billing")) "" else s.optString("billing")),
+                o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd"), u.optDouble("api_cost", 0.0)),
                 o.optBoolean("pinned"), o.optLong("last_active"), o.optInt("messages"),
                 (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } },
                 o.optString("journal"), if (o.isNull("next_wake")) 0 else o.optLong("next_wake"), o.optString("wake_reason"), o.optLong("wakes"), o.optLong("last_wake"))
@@ -78,8 +78,9 @@ class Api(val url: String, val key: String) {
     fun settings(): SrvSettings = JSONObject(call("GET", "/settings")).let { parseSettings(it) }
     fun putSettings(body: JSONObject): SrvSettings = parseSettings(JSONObject(call("PUT", "/settings", body.toString())))
     private fun parseSettings(d: JSONObject): SrvSettings { val t = d.getJSONObject("telegram"); val n = d.getJSONObject("ntfy")
-        return SrvSettings(d.optBoolean("paused"), d.optInt("max_parallel", 2), d.optString("tz", "UTC"), d.optString("global_memory"), t.optBoolean("token_set"), t.optBoolean("paired"), if (t.isNull("pair_code")) null else t.optString("pair_code"), n.optString("server"), n.optString("topic"), d.getJSONObject("webhook").optBoolean("set")) }
+        return SrvSettings(d.optBoolean("paused"), d.optInt("max_parallel", 2), d.optString("tz", "UTC"), d.optString("global_memory"), t.optBoolean("token_set"), t.optBoolean("paired"), if (t.isNull("pair_code")) null else t.optString("pair_code"), n.optString("server"), n.optString("topic"), d.getJSONObject("webhook").optBoolean("set"), d.optBoolean("api_key_set"), d.optString("api_key_tail"), d.optString("default_billing", "subscription")) }
     fun testNotify(): String { val r = JSONObject(call("POST", "/settings/test", "{}")); return if (r.optBoolean("ok")) "" else r.optJSONArray("errors")?.let { e -> (0 until e.length()).joinToString("; ") { e.getString(it) } } ?: "failed" }
+    fun testApiKey(): String { val r = JSONObject(call("POST", "/settings/api-key/test", "{}", 60_000)); return if (r.optBoolean("ok")) "" else r.optString("error", "The key did not work.") }
     fun telegramPair() { call("POST", "/settings/telegram/pair", "{}") }
     fun telegramUnlink() { call("DELETE", "/settings/telegram") }
 
@@ -101,7 +102,7 @@ class Api(val url: String, val key: String) {
 
     private fun specJson(s: Spec) = JSONObject().put("name", s.name).put("model", s.model).put("prompt", s.prompt).put("memory", s.memory)
         .put("mcp_config", if (s.mcp.isBlank()) JSONObject.NULL else s.mcp.trim()).put("subagents", s.subagents)
-        .put("browser", s.browser).put("autonomous", s.autonomous).put("wake_min", s.wakeMin).put("max_wakes", s.maxWakes).put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
+        .put("billing", if (s.billing.isBlank()) JSONObject.NULL else s.billing).put("browser", s.browser).put("autonomous", s.autonomous).put("wake_min", s.wakeMin).put("max_wakes", s.maxWakes).put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
     fun save(id: Long?, s: Spec): Long = if (id == null) call("POST", "/agents", specJson(s)).trim().toLong() else { call("PUT", "/agents/$id", specJson(s)); id }
 }
 

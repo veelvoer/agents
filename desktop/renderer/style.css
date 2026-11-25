@@ -104,3 +104,4 @@ html.framed .wc{display:none}html.framed *{-webkit-app-region:no-drag !important
 .repeatline{display:flex;align-items:center;gap:6px;color:var(--clay)}.repeatline.muted{color:var(--muted)}.repeatline svg{width:14px;height:14px}.chat-head #hrep{min-height:36px}
 .chat-head #hlife,.chat-head #hrep{min-height:36px}
 .chat-head{flex-wrap:wrap}
+button{white-space:nowrap}

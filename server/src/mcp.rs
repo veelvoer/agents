@@ -65,7 +65,14 @@ fn run_tool(name: &str, a: &Value) -> Result<String, String> {
             call("POST", &format!("/jobs/{job}/notes"), Some(json!({"notes": s("notes")})), 30)?; Ok("Notes saved for the next run.".into())
         }
         "save_journal" => { call("POST", &format!("/agents/{me}/journal"), Some(json!({"text": s("text")})), 30)?; Ok("Journal saved.".into()) }
-        "set_next_wake" => { let r = call("POST", &format!("/agents/{me}/wake"), Some(json!({"when": s("when"), "reason": s("reason")})), 30)?; Ok(format!("You will wake up next on {}.", r["next"].as_str().unwrap_or(""))) }
+        "set_next_wake" => {
+            // Agents sometimes guess other parameter names (delaySeconds, delay, minutes ...): accept the usual ones.
+            let mut when = String::new();
+            for k in ["when", "time", "at", "wake_at", "next_wake", "delay", "in", "datetime"] { if let Some(v) = a.get(k) { when = match v { Value::String(t) => t.clone(), Value::Number(n) => format!("in {} seconds", n), _ => String::new() }; if !when.is_empty() { break; } } }
+            for (k, unit) in [("delaySeconds", "seconds"), ("delay_seconds", "seconds"), ("seconds", "seconds"), ("delayMinutes", "minutes"), ("minutes", "minutes"), ("hours", "hours")] { if when.is_empty() { if let Some(v) = a.get(k) { let n = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse().ok())); if let Some(n) = n { when = format!("in {} {unit}", n.round() as u64); } } } }
+            if when.trim().chars().all(|c| c.is_ascii_digit()) && !when.is_empty() { when = format!("in {} seconds", when.trim()); }
+            if when.trim().is_empty() { return Err("set_next_wake needs the parameter \"when\", for example {\"when\": \"in 6 hours\", \"reason\": \"...\"} or {\"when\": \"tomorrow 08:00\"}.".into()); }
+            let r = call("POST", &format!("/agents/{me}/wake"), Some(json!({"when": when, "reason": s("reason")})), 120)?; Ok(format!("You will wake up next on {}.", r["next"].as_str().unwrap_or(""))) }
         "list_tasks" => {
             let r = call("GET", "/jobs", None, 30)?;
             let list = r.as_array().cloned().unwrap_or_default();

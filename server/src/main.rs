@@ -400,7 +400,7 @@ fn parse_when(text: &str, tz: &str) -> Result<Schedule, String> {
     let bad = || format!("I don't understand \"{text}\". Try: daily 08:00, weekdays 08:30, weekly monday 09:00, every 30 minutes, in 2 hours, at 2026-12-01 09:00, or cron 0 8 * * *");
     let w: Vec<&str> = t.split_whitespace().collect();
     let cron = |m: u32, h: u32, dow: &str| Schedule::Cron { expr: format!("{m} {h} * * {dow}"), tz: tz.to_string(), text: String::new() };
-    let unit = |n: u64, u: &str| -> Option<u64> { match u.trim_end_matches('s') { "minute" | "min" => Some(n), "hour" | "hr" | "h" => Some(n * 60), "day" | "d" => Some(n * 1440), _ => None } };
+    let unit = |n: u64, u: &str| -> Option<u64> { match u.trim_end_matches('s') { "second" | "sec" => Some(n.div_ceil(60)), "minute" | "min" => Some(n), "hour" | "hr" | "h" => Some(n * 60), "day" | "d" => Some(n * 1440), _ => None } };
     match w.as_slice() {
         ["cron", rest @ ..] => { let e = rest.join(" "); croner::Cron::new(&e).parse().map_err(|x| format!("bad cron \"{e}\": {x}"))?; Ok(Schedule::Cron { expr: e, tz: tz.into(), text: String::new() }) }
         [a, b, c, d, e] if croner::Cron::new(&format!("{a} {b} {c} {d} {e}")).parse().is_ok() => Ok(Schedule::Cron { expr: format!("{a} {b} {c} {d} {e}"), tz: tz.into(), text: String::new() }),

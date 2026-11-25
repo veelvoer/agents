@@ -85,6 +85,9 @@ struct Spec {
     /// Most wake-ups per 24 hours (default 24).
     #[serde(default)]
     max_wakes: Option<u32>,
+    /// The agent gets a real headless web browser (it can open pages, click, type, log in, keep its own cookies).
+    #[serde(default)]
+    browser: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -666,6 +669,39 @@ fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool
     Some(path)
 }
 
+
+fn which(name: &str) -> Option<PathBuf> {
+    std::env::var("PATH").ok()?.split(':').map(|d| PathBuf::from(d).join(name)).find(|p| p.is_file())
+}
+
+/// Where the Playwright MCP program lives (installed by install.sh) and which Chrome/Chromium to drive.
+fn browser_setup() -> Result<(PathBuf, PathBuf, Option<PathBuf>), String> {
+    let home = std::env::var("HOME").map_err(|_| "no HOME".to_string())?;
+    let cli = std::env::var("AGENTS_BROWSER_JS").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(&home).join(".local/share/agents-browser/node_modules/@playwright/mcp/cli.js"));
+    if !cli.is_file() { return Err("the browser program is not installed on the server (run the installer again)".into()); }
+    let node = which("node").or_else(|| ["/usr/bin/node", "/usr/local/bin/node"].iter().map(PathBuf::from).find(|p| p.is_file())).ok_or("node is not installed on the server")?;
+    let chrome = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].iter().map(PathBuf::from).find(|p| p.is_file());
+    Ok((node, cli, chrome))
+}
+
+/// A browser (Playwright MCP) for one agent. It keeps its own profile folder, so logins and cookies survive between runs.
+fn browser_config_for(s: &S, id: u64) -> Result<PathBuf, String> {
+    let (node, cli, chrome) = browser_setup()?;
+    let dir = data_dir(s).join("mcp");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let profile = data_dir(s).join("browser-profiles").join(id.to_string());
+    let _ = std::fs::create_dir_all(&profile);
+    let mut args: Vec<String> = vec![cli.to_string_lossy().into(), "--headless".into(), "--user-data-dir".into(), profile.to_string_lossy().into(), "--viewport-size".into(), "1280,900".into()];
+    if let Some(c) = chrome { args.push("--executable-path".into()); args.push(c.to_string_lossy().into()); }
+    if unsafe_root() { args.push("--no-sandbox".into()); }
+    let path = dir.join(format!("{id}-browser.json"));
+    let cfg = json!({"mcpServers": {"browser": {"command": node, "args": args}}});
+    std::fs::write(&path, cfg.to_string()).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+fn unsafe_root() -> bool { std::fs::read_to_string("/proc/self/status").map(|t| t.lines().any(|l| l.starts_with("Uid:") && l.split_whitespace().nth(1) == Some("0"))).unwrap_or(false) }
+
 fn looks_limited(t: &str) -> bool {
     let t = t.to_lowercase();
     ["usage limit", "rate limit", "limit reached", "limit will reset", "5-hour limit", "weekly limit"].iter().any(|k| t.contains(k))
@@ -713,6 +749,8 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     let workdir = spec.workdir.clone().filter(|w| !w.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir(s).join("workspaces").join(id.to_string()));
     let _ = std::fs::create_dir_all(&workdir);
     let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id, spec.autonomous) } else { None };
+    let browser_cfg = if spec.browser { match browser_config_for(s, id) { Ok(p) => Some(p), Err(e) => { sp.push_str(&format!("\n\nYour web browser is not available right now: {e}. Do not pretend to browse; say that it is unavailable if you need it.")); None } } } else { None };
+    if browser_cfg.is_some() { sp.push_str("\n\nYou have a real web browser (tools starting with browser_). It keeps its own cookies, so a login stays between runs. Work step by step: open the page, read the snapshot, act. Save any password or secret you create only in a file with mode 600 in your workspace, never in your journal or in messages."); }
 
     let build = |resume: Option<&str>| {
         let mut c = Command::new("claude");
@@ -724,6 +762,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         if !denied.is_empty() { c.args(["--disallowedTools", &denied.join(",")]); }
         let mut allowed: Vec<&str> = vec![];
         if spec.os_tools { allowed.push("mcp__agentic-os"); }
+        if browser_cfg.is_some() { allowed.push("mcp__browser"); }
         match spec.autonomy.as_str() {
             "full" => { c.arg("--dangerously-skip-permissions"); }
             "standard" => { c.args(["--permission-mode", "acceptEdits"]); allowed.extend(["WebSearch", "WebFetch"]); }
@@ -731,6 +770,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         }
         if !allowed.is_empty() { c.args(["--allowedTools", &allowed.join(",")]); }
         if let Some(p) = &os_cfg { c.arg("--mcp-config").arg(p); }
+        if let Some(p) = &browser_cfg { c.arg("--mcp-config").arg(p).arg("--strict-mcp-config"); }
         if let Some(m) = spec.mcp_config.as_deref().filter(|m| !m.is_empty()) { c.args(["--mcp-config", m]); }
         if let Some(t) = o.max_turns { c.args(["--max-turns", &t.to_string()]); }
         if let Some(x) = resume { c.args(["--resume", x]); }

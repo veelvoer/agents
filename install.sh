@@ -27,6 +27,8 @@ command -v systemctl >/dev/null || die "This installer needs systemd."
 case "$(uname -m)" in x86_64|amd64) ARCH=x86_64;; aarch64|arm64) ARCH=aarch64;; *) die "Unsupported processor: $(uname -m)";; esac
 
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+# a plain ssh or tool session may not know where the user systemd lives
+[ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ] && export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 can_sudo() {   # root, passwordless sudo, or sudo with a password typed on the terminal
   [ "$(id -u)" -eq 0 ] && return 0
   command -v sudo >/dev/null || return 1
@@ -100,7 +102,9 @@ RestartSec=3
 [Install]
 WantedBy=$WANTED
 U
-$SC daemon-reload; $SC enable --now agents-server >/dev/null 2>&1; $SC restart agents-server
+$SC daemon-reload || die "I cannot reach systemd for this user. Run this command again from a normal login shell (ssh), or as root."
+$SC enable --now agents-server >/dev/null 2>&1 || true
+$SC restart agents-server || die "The service did not restart. See: $SC status agents-server"
 if [ "$(id -u)" -ne 0 ]; then loginctl enable-linger "$USER" 2>/dev/null || warn "Could not make the service start at boot. Run: sudo loginctl enable-linger $USER"; fi
 sleep 1
 curl -fsS -m 5 "http://127.0.0.1:$PORT/health" >/dev/null || die "The server did not start. See: $SC status agents-server"

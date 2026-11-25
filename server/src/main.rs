@@ -653,7 +653,8 @@ You have the agentic-os tools: notify (message the user), schedule_task (do some
 When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. Be brief and concrete.";
 
 fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    // After the binary is replaced while the server runs, Linux reports the old path with a " (deleted)" suffix: use the real path.
+    let exe = std::env::current_exe().ok().map(|p| { let t = p.to_string_lossy().to_string(); PathBuf::from(t.strip_suffix(" (deleted)").unwrap_or(&t)) })?;
     let port = s.addr.rsplit(':').next().unwrap_or("7777");
     let dir = data_dir(s).join("mcp");
     std::fs::create_dir_all(&dir).ok()?;

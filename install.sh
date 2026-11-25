@@ -3,6 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/veelvoer/agents/main/install.sh | bash
 # Options (after "bash -s --"):  --domain <name>  use your own domain for HTTPS
 #                                --no-https       skip HTTPS, listen on port 7777 (plain HTTP)
+#                                --no-browser     do not set up the web browser for agents
 #                                --uninstall      remove the service (your agents file is kept)
 # It installs one small program, a service that starts at boot, and (if you want) HTTPS.
 set -euo pipefail
@@ -11,9 +12,9 @@ VERSION="${AGENTS_VERSION:-latest}"
 PORT="${AGENTS_PORT:-7777}"
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/agents"
 ENVF="$CFG/env"
-DOMAIN=""; HTTPS=1; UNINSTALL=0
+DOMAIN=""; HTTPS=1; UNINSTALL=0; BROWSER=1
 while [ $# -gt 0 ]; do case "$1" in
-  --domain) DOMAIN="${2:-}"; shift 2;; --no-https) HTTPS=0; shift;; --uninstall) UNINSTALL=1; shift;;
+  --domain) DOMAIN="${2:-}"; shift 2;; --no-https) HTTPS=0; shift;; --no-browser) BROWSER=0; shift;; --uninstall) UNINSTALL=1; shift;;
   *) echo "Unknown option: $1" >&2; exit 2;; esac; done
 
 say() { printf '\n  \033[1m%s\033[0m\n' "$*"; }
@@ -133,6 +134,20 @@ if [ "$USE_CADDY" = 1 ]; then
     warn "Caddy did not accept the settings, so I left HTTPS off. The server answers on port $PORT."; LISTEN="0.0.0.0:$PORT"; USE_CADDY=0
     sed -i "s|^AGENTS_ADDR=.*|AGENTS_ADDR=$LISTEN|" "$ENVF"; $SC restart agents-server
   fi
+fi
+
+# 6. a real web browser for agents (Playwright + Chrome/Chromium), optional
+if [ "$BROWSER" = 1 ]; then
+  BD="$HOME/.local/share/agents-browser"
+  if command -v node >/dev/null && command -v npm >/dev/null; then
+    mkdir -p "$BD"
+    if (cd "$BD" && { [ -f package.json ] || npm init -y >/dev/null 2>&1; } && npm install --no-audit --no-fund --cache "$HOME/.cache/agents-npm" @playwright/mcp@latest >/dev/null 2>&1); then ok "Browser program installed (agents can browse when you switch it on for them)"
+    else warn "Could not install the browser program. Agents will work without a browser."; fi
+    if ! ls /usr/bin/google-chrome* /usr/bin/chromium* >/dev/null 2>&1; then
+      if [ -f "$BD/node_modules/playwright-core/cli.js" ] && (cd "$BD" && node node_modules/playwright-core/cli.js install chromium >/dev/null 2>&1); then ok "Chromium downloaded for the browser"
+      else warn "No Chrome or Chromium found. Install one (for example: sudo apt install chromium) so agents can browse."; fi
+    fi
+  else warn "Node.js is not installed, so agents get no web browser. Install Node.js 18 or newer and run this again."; fi
 fi
 
 if [ "$USE_CADDY" = 1 ]; then ADDR="https://$DOMAIN"; else ADDR="http://${IP:-$(hostname -I 2>/dev/null | cut -d' ' -f1)}:$PORT"; fi

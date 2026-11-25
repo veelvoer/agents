@@ -432,10 +432,11 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
     var prompt by remember { mutableStateOf(s?.prompt ?: "") }; var memory by remember { mutableStateOf(s?.memory ?: "") }
     var mcp by remember { mutableStateOf(s?.mcp ?: "") }; var subs by remember { mutableStateOf(s?.subagents ?: false) }
     var alive by remember { mutableStateOf(s?.autonomous ?: false) }
+    var browser by remember { mutableStateOf(s?.browser ?: false) }
     var autonomy by remember { mutableStateOf(s?.autonomy ?: "safe") }; var osTools by remember { mutableStateOf(s?.osTools ?: true) }
     var cap by remember { mutableStateOf(s?.dailyCap?.toString() ?: "") }; var workdir by remember { mutableStateOf(s?.workdir ?: "") }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
-    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir, alive, s?.wakeMin ?: 15, s?.maxWakes ?: 24)
+    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir, alive, s?.wakeMin ?: 15, s?.maxWakes ?: 24, browser)
     ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (agent == null) "New agent" else "Edit agent", style = MaterialTheme.typography.headlineMedium)
@@ -453,6 +454,8 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Lives on its own", fontWeight = FontWeight.SemiBold); Muted("Wakes up by itself, thinks, acts and decides when to wake next, all the time") }
                 Switch(alive, { on -> alive = on; if (on && autonomy == "safe") autonomy = "standard" }) }
             if (!alive && timingHint(prompt)) Text("These instructions mention doing things over time. Turn on Lives on its own and the agent works out the schedule by itself.", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Can use a web browser", fontWeight = FontWeight.SemiBold); Muted("Opens pages, clicks, types, logs in, and keeps its own cookies") }
+                Switch(browser, { browser = it }) }
             Label("What it may do on the server")
             Segmented(listOf("safe" to "Look only", "standard" to "Edit and browse", "full" to "Everything"), autonomy) { autonomy = it }
             Muted(when (autonomy) { "safe" -> "Reads files and answers. Nothing is changed."; "standard" -> "Can edit files in its folder and search the web."; else -> "Can run any command on the server without asking. Only for agents you trust." })

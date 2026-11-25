@@ -283,7 +283,7 @@ function confirmBox(title, text, ok, fn) {
 }
 
 function editor(a) {
-  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false };
+  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, browser: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false, browser: false };
   const d = document.createElement('div'); d.className = 'scrim';
   const known = () => S.models.some((m) => m[0] === sp.model);
   const draw = () => {
@@ -296,6 +296,7 @@ function editor(a) {
     <div class="field"><label class="label" for="mcp">Tools (MCP file on the server)</label><input id="mcp" placeholder="/home/me/browser-mcp.json" value="${esc(sp.mcp_config)}"></div>
     <div class="row" style="min-height:40px"><span class="grow"><b>Lives on its own</b> <span class="small muted">: wakes up by itself, thinks, acts and decides when to wake next, all the time</span></span><button class="toggle ${sp.autonomous ? 'on' : ''}" id="e-life" role="switch" aria-checked="${!!sp.autonomous}" aria-label="Lives on its own"></button></div>
     ${!sp.autonomous && TIMING_WORDS.test(sp.prompt) ? '<p class="tip" style="color:var(--clay)">These instructions mention doing things over time. Turn on Lives on its own and the agent works out the schedule by itself.</p>' : ''}
+    <div class="row" style="min-height:40px"><span class="grow"><b>Can use a web browser</b> <span class="small muted">: opens pages, clicks, types, logs in, and keeps its own cookies</span></span><button class="toggle ${sp.browser ? 'on' : ''}" id="e-browser" role="switch" aria-checked="${!!sp.browser}" aria-label="Can use a web browser"></button></div>
     <div class="field"><span class="label">What it may do on the server</span>${seg('e-auto', [['safe', 'Look only'], ['standard', 'Edit files and browse'], ['full', 'Everything']], sp.autonomy)}<p class="tip">${{ safe: 'Reads files and answers. Nothing is changed.', standard: 'Can edit files in its folder and search the web.', full: 'Can run any command on the server without asking. Only for agents you trust.' }[sp.autonomy]}</p></div>
     <div class="row" style="min-height:40px"><span class="grow">Agentic tools: message me, schedule tasks, remember, ask other agents</span><button class="toggle ${sp.os_tools ? 'on' : ''}" id="e-os" role="switch" aria-checked="${sp.os_tools}" aria-label="Agentic tools"></button></div>
     <div class="row wrap"><div class="field grow"><label class="label" for="e-cap">Daily limit for automatic runs ($, optional)</label><input id="e-cap" type="number" min="0" step="0.5" value="${sp.daily_cap ?? ''}"></div><div class="field grow"><label class="label" for="e-wd">Working folder (optional)</label><input id="e-wd" placeholder="/home/me/projects/site" value="${esc(sp.workdir)}"></div></div>
@@ -306,6 +307,7 @@ function editor(a) {
     $$('[data-m]', d).forEach((b) => (b.onclick = () => { keep(); sp.model = b.dataset.m; $('#cm', d) && ($('#cm', d).value = ''); draw(); }));
     $$('#e-auto button', d).forEach((b) => (b.onclick = () => { keep(); sp.autonomy = b.dataset.v; draw(); }));
     $('#e-life', d).onclick = () => { keep(); sp.autonomous = !sp.autonomous; if (sp.autonomous && sp.autonomy === 'safe') sp.autonomy = 'standard'; draw(); };
+    $('#e-browser', d).onclick = () => { keep(); sp.browser = !sp.browser; draw(); };
     $('#e-os', d).onclick = () => { keep(); sp.os_tools = !sp.os_tools; draw(); };
     $('#sub', d).onclick = () => { keep(); sp.subagents = !sp.subagents; draw(); };
     $('#cancel', d).onclick = () => d.remove();

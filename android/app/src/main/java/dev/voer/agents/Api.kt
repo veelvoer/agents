@@ -10,7 +10,7 @@ class ApiError(message: String) : Exception(message)
 data class Usage(val input: Long, val output: Long, val cache: Long, val cost: Double) { val tokens get() = input + output }
 data class Spec(val name: String, val model: String, val prompt: String, val memory: String, val mcp: String, val subagents: Boolean,
                 val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "",
-                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24)
+                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24, val browser: Boolean = false)
 data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>,
                  val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0)
 data class Msg(val role: String, val text: String, val at: Long)
@@ -51,7 +51,7 @@ class Api(val url: String, val key: String) {
             val dl = o.optJSONArray("daily") ?: JSONArray()
             Agent(o.getLong("id"), Spec(s.getString("name"), s.getString("model"), s.optString("prompt"), s.optString("memory"), if (s.isNull("mcp_config")) "" else s.optString("mcp_config"), s.optBoolean("subagents"),
                 s.optString("autonomy", "safe"), s.optBoolean("os_tools", true), if (s.isNull("daily_cap") || !s.has("daily_cap")) null else s.optDouble("daily_cap"), if (s.isNull("workdir")) "" else s.optString("workdir"),
-                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24)),
+                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24), s.optBoolean("browser")),
                 o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd")),
                 o.optBoolean("pinned"), o.optLong("last_active"), o.optInt("messages"),
                 (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } },
@@ -101,7 +101,7 @@ class Api(val url: String, val key: String) {
 
     private fun specJson(s: Spec) = JSONObject().put("name", s.name).put("model", s.model).put("prompt", s.prompt).put("memory", s.memory)
         .put("mcp_config", if (s.mcp.isBlank()) JSONObject.NULL else s.mcp.trim()).put("subagents", s.subagents)
-        .put("autonomous", s.autonomous).put("wake_min", s.wakeMin).put("max_wakes", s.maxWakes).put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
+        .put("browser", s.browser).put("autonomous", s.autonomous).put("wake_min", s.wakeMin).put("max_wakes", s.maxWakes).put("autonomy", s.autonomy).put("os_tools", s.osTools).put("daily_cap", s.dailyCap ?: JSONObject.NULL).put("workdir", if (s.workdir.isBlank()) JSONObject.NULL else s.workdir.trim()).toString()
     fun save(id: Long?, s: Spec): Long = if (id == null) call("POST", "/agents", specJson(s)).trim().toLong() else { call("PUT", "/agents/$id", specJson(s)); id }
 }
 

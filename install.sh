@@ -143,7 +143,7 @@ if [ "$BROWSER" = 1 ]; then
     mkdir -p "$BD"
     if (cd "$BD" && { [ -f package.json ] || npm init -y >/dev/null 2>&1; } && npm install --no-audit --no-fund --cache "$HOME/.cache/agents-npm" @playwright/mcp@latest >/dev/null 2>&1); then ok "Browser program installed (agents can browse when you switch it on for them)"
     else warn "Could not install the browser program. Agents will work without a browser."; fi
-    if ! ls /usr/bin/google-chrome* /usr/bin/chromium* >/dev/null 2>&1; then
+    if ! compgen -G "/usr/bin/google-chrome*" >/dev/null && ! compgen -G "/usr/bin/chromium*" >/dev/null; then
       if [ -f "$BD/node_modules/playwright-core/cli.js" ] && (cd "$BD" && node node_modules/playwright-core/cli.js install chromium >/dev/null 2>&1); then ok "Chromium downloaded for the browser"
       else warn "No Chrome or Chromium found. Install one (for example: sudo apt install chromium) so agents can browse."; fi
     fi

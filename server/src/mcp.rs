@@ -19,6 +19,7 @@ fn tools() -> Value {
     let mut v = base_tools();
     if std::env::var("AGENT_AUTONOMOUS").as_deref() == Ok("1") {
         v.as_array_mut().unwrap().extend([
+            json!({"name": "set_my_pace", "description": "Change how often you are allowed to wake up: the fewest minutes between wake-ups and the most wake-ups per day (up to 200). Use it when the user asks you to be more or less active. Then also use set_next_wake to wake sooner or later.", "inputSchema": {"type": "object", "properties": {"min_minutes": {"type": "integer"}, "max_per_day": {"type": "integer"}}}}),
             json!({"name": "save_journal", "description": "Replace your journal: your private long-term memory that you read every time you wake up. Keep it organised and under 4000 characters: your purpose and plan, what you did and built, what you learned, and what comes next.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}),
             json!({"name": "set_next_wake", "description": "Choose when you wake up next. Sleep long when nothing needs you. Use phrases such as 'in 45 minutes', 'in 6 hours', 'tomorrow 08:00', 'daily 08:00' (the next 08:00), or 'at 2026-12-01 09:00'. Times are in the user's time zone.", "inputSchema": {"type": "object", "properties": {"when": {"type": "string"}, "reason": {"type": "string", "description": "What you will do then"}}, "required": ["when"]}})
         ]);
@@ -40,6 +41,10 @@ fn base_tools() -> Value {
           "required": ["name", "when"]}},
         {"name": "save_task_notes", "description": "Only during a scheduled run: save short notes for the next run of this same job (what you have covered so far and what comes next). Use it for series such as lessons or tracking, so you never repeat yourself. Replaces the old notes. Under 1500 characters.",
          "inputSchema": {"type": "object", "properties": {"notes": {"type": "string"}}, "required": ["notes"]}},
+        {"name": "add_standing_order", "description": "Save a rule the user gave you that must hold from now on (for example: 'you may create accounts without asking', 'never post before 9', 'write shorter messages'). It is put in front of you in every future run, so you cannot forget it. Use it whenever the user says from now on, always, never, you may, stop, or asks you to change how you work. Afterwards tell the user exactly what you saved.",
+         "inputSchema": {"type": "object", "properties": {"order": {"type": "string", "description": "One clear rule, in your own words, complete without the conversation"}}, "required": ["order"]}},
+        {"name": "list_standing_orders", "description": "Show your standing orders with their numbers.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "remove_standing_order", "description": "Remove a standing order by its number when the user withdraws it.", "inputSchema": {"type": "object", "properties": {"number": {"type": "integer"}}, "required": ["number"]}},
         {"name": "list_tasks", "description": "List the scheduled tasks of all agents (id, name, schedule, next run).", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "delete_task", "description": "Delete a scheduled task by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
         {"name": "remember", "description": "Save a short fact so you (or all agents, with shared=true) remember it in every future session. Keep facts short; do not save secrets.",
@@ -73,6 +78,10 @@ fn run_tool(name: &str, a: &Value) -> Result<String, String> {
             if when.trim().chars().all(|c| c.is_ascii_digit()) && !when.is_empty() { when = format!("in {} seconds", when.trim()); }
             if when.trim().is_empty() { return Err("set_next_wake needs the parameter \"when\", for example {\"when\": \"in 6 hours\", \"reason\": \"...\"} or {\"when\": \"tomorrow 08:00\"}.".into()); }
             let r = call("POST", &format!("/agents/{me}/wake"), Some(json!({"when": when, "reason": s("reason")})), 120)?; Ok(format!("You will wake up next on {}.", r["next"].as_str().unwrap_or(""))) }
+        "add_standing_order" => { let r = call("POST", &format!("/agents/{me}/orders"), Some(json!({"text": s("order")})), 30)?; Ok(format!("Saved as a standing order. You now have {} standing order(s).", r["orders"].as_array().map_or(0, |a| a.len()))) }
+        "list_standing_orders" => { let r = call("GET", "/agents", None, 30)?; let list = r["agents"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_u64() == Some(me))).and_then(|x| x["orders"].as_array().cloned()).unwrap_or_default(); if list.is_empty() { Ok("No standing orders.".into()) } else { Ok(list.iter().enumerate().map(|(i, o)| format!("{}. {}", i + 1, o.as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n")) } }
+        "remove_standing_order" => { call("DELETE", &format!("/agents/{me}/orders/{}", a["number"].as_u64().unwrap_or(0)), None, 30)?; Ok("Removed.".into()) }
+        "set_my_pace" => { let r = call("POST", &format!("/agents/{me}/pace"), Some(json!({"min_minutes": a["min_minutes"], "max_per_day": a["max_per_day"]})), 30)?; Ok(format!("Done. You may now wake up at most every {} minutes and at most {} times a day.", r["min_minutes"], r["max_per_day"])) }
         "list_tasks" => {
             let r = call("GET", "/jobs", None, 30)?;
             let list = r.as_array().cloned().unwrap_or_default();

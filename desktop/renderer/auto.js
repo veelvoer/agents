@@ -15,7 +15,6 @@ async function fetchActivity() {
     const d = await api('GET', '/activity?limit=80'); const prev = S.actLast;
     S.acts = d.items; S.actLast = d.last;
     if (localStorage.getItem('seen') === null) { S.seen = d.last; localStorage.setItem('seen', String(d.last)); }
-    if (prev && cfg.notify && !document.hasFocus()) for (const e of d.items.filter((x) => x.id > prev && x.kind !== 'system' && x.kind !== 'thought')) { try { new Notification(e.title || 'Agents', { body: e.body.slice(0, 200), tag: e.agent_id ? 'agent-' + e.agent_id : undefined }); } catch {} }
     if (S.tab === 'activity') { renderActivity(); markRead(); } else updateBadge();
   } catch {}
 }
@@ -147,6 +146,7 @@ function lifeDialog(agent) {
   <p class="tip" style="margin-top:-8px">${alive ? 'It wakes up by itself, thinks about its purpose (its instructions), does things with its tools, writes in its journal, and decides when to wake next. It is not waiting for you.' : 'Turn this on and the agent lives on the server by itself: it decides what to do and when, keeps working for days, and tells you only when it matters.'}</p>
   <div class="setrow"><span class="grow"><b>Lives on its own</b></span><button class="toggle ${alive ? 'on' : ''}" id="l-on" role="switch" aria-checked="${alive}" aria-label="Lives on its own"></button></div>
   ${alive ? `<div class="card" style="padding:12px 14px"><div class="small">${agent.status === 'running' ? 'Awake right now.' : agent.next_wake ? `Next wake-up: <b>${esc(wakeText(agent.next_wake))}</b>${agent.wake_reason ? ` · ${esc(agent.wake_reason)}` : ''}` : 'Waking up soon.'}</div><div class="small muted">${agent.wakes} wake-up${agent.wakes === 1 ? '' : 's'} so far${agent.last_wake ? ' · last ' + ago(agent.last_wake) : ''}</div></div>
+  <div class="field"><label class="label" for="l-o">Rules it follows from now on (one per line, you can also tell it in chat)</label><textarea id="l-o" style="min-height:90px" placeholder="For example: You may create accounts without asking me.">${esc((agent.orders || []).join('\n'))}</textarea></div>
   <div class="field"><label class="label" for="l-j">Its journal (its own memory, it writes this itself, you can edit)</label><textarea id="l-j" style="min-height:140px" placeholder="Empty: it writes here after its first wake-up.">${esc(agent.journal || '')}</textarea></div>
   <div class="row wrap"><div class="field grow"><label class="label" for="l-min">Wake at most every (minutes)</label><input id="l-min" type="number" min="1" value="${sp.wake_min ?? 15}"></div><div class="field grow"><label class="label" for="l-max">Most wake-ups per day</label><input id="l-max" type="number" min="1" max="200" value="${sp.max_wakes ?? 24}"></div></div>
   <p class="tip">Every wake-up uses your Claude subscription. Fewer wake-ups and a daily cost limit (in the agent's settings) keep usage calm. What it may do on the server is set by the agent's access level (now: ${{ safe: 'look only', standard: 'edit files and browse', full: 'everything' }[sp.autonomy || 'safe']}). To let it run programs, such as tests or scripts, set its access to Everything.</p>` : `<p class="tip">Tip: write its purpose in the Instructions, for example <i>Explain something new about quantum computers every morning, starting from the basics</i>. It works out the schedule by itself.</p>`}
@@ -163,6 +163,7 @@ function lifeDialog(agent) {
   $('#l-save', d)?.addEventListener('click', async () => {
     try {
       await api('POST', `/agents/${agent.id}/journal`, { text: $('#l-j', d).value });
+      await api('PUT', `/agents/${agent.id}/orders`, { text: $('#l-o', d).value });
       await api('PUT', `/agents/${agent.id}`, specOf(agent, { wake_min: Math.max(1, +$('#l-min', d).value || 15), max_wakes: Math.min(200, Math.max(1, +$('#l-max', d).value || 24)) }));
       d.remove(); toast('Saved');
     } catch (e) { $('#e', d).textContent = e.message; }

@@ -12,7 +12,7 @@ data class Spec(val name: String, val model: String, val prompt: String, val mem
                 val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "",
                 val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24, val browser: Boolean = false, val billing: String = "")
 data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>,
-                 val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0)
+                 val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0, val orders: List<String> = emptyList())
 data class Msg(val role: String, val text: String, val at: Long)
 data class Page(val start: Int, val total: Int, val messages: List<Msg>)
 data class Parsed(val schedule: JSONObject, val human: String, val next: List<String>, val tz: String)
@@ -55,7 +55,8 @@ class Api(val url: String, val key: String) {
                 o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd"), u.optDouble("api_cost", 0.0)),
                 o.optBoolean("pinned"), o.optLong("last_active"), o.optInt("messages"),
                 (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } },
-                o.optString("journal"), if (o.isNull("next_wake")) 0 else o.optLong("next_wake"), o.optString("wake_reason"), o.optLong("wakes"), o.optLong("last_wake"))
+                o.optString("journal"), if (o.isNull("next_wake")) 0 else o.optLong("next_wake"), o.optString("wake_reason"), o.optLong("wakes"), o.optLong("last_wake"),
+                o.optJSONArray("orders")?.let { r -> (0 until r.length()).map { r.getString(it) } } ?: emptyList())
         }, d.optLong("act_last"), d.optBoolean("paused"))
     }
 
@@ -90,6 +91,7 @@ class Api(val url: String, val key: String) {
         return Page(d.getInt("start"), d.getInt("total"), (0 until a.length()).map { a.getJSONObject(it).let { m -> Msg(m.getString("role"), m.getString("text"), m.optLong("at")) } })
     }
 
+    fun putOrders(id: Long, text: String) { call("PUT", "/agents/$id/orders", JSONObject().put("text", text).toString()) }
     fun saveJournal(id: Long, text: String) { call("POST", "/agents/$id/journal", JSONObject().put("text", text).toString()) }
     fun wakeNow(id: Long) { call("POST", "/agents/$id/wake-now", "{}") }
     fun clear(id: Long) { call("DELETE", "/agents/$id/messages") }

@@ -121,6 +121,8 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     var repeatFor by remember { mutableStateOf<Long?>(null) }
     var lifeFor by remember { mutableStateOf<Long?>(null) }
     var offer by remember { mutableStateOf<Triple<Long, String, String>?>(null) }
+    var askNotify by remember { mutableStateOf(!prefs.notify && !ctx.getSharedPreferences("state", Context.MODE_PRIVATE).getBoolean("askedNotify", false)) }
+    val notifyPermission = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok -> if (ok || android.os.Build.VERSION.SDK_INT < 33) { Notifier.enable(ctx, actLastState.value); onPrefs(prefs.copy(notify = true)) } }
     val state = remember { ctx.getSharedPreferences("state", Context.MODE_PRIVATE) }
     var seen by remember { mutableLongStateOf(state.getLong("seen", -1L)) }
     val scope = rememberCoroutineScope()
@@ -166,6 +168,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
     }
 
     val motion = LocalMotion.current
+    actLastState.value = actLast
     val current = agents?.firstOrNull { it.id == open }
     BackHandler(open != null) { open = null }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
@@ -203,6 +206,7 @@ fun MainScreen(api: Api, prefs: Prefs, onPrefs: (Prefs) -> Unit, onLogout: () ->
             }
         }
     }
+    if (askNotify && agents != null) AskNotifyDialog({ askNotify = false; ctx.getSharedPreferences("state", Context.MODE_PRIVATE).edit().putBoolean("askedNotify", true).apply(); if (android.os.Build.VERSION.SDK_INT >= 33) notifyPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) else { Notifier.enable(ctx, actLast); onPrefs(prefs.copy(notify = true)) } }, { askNotify = false; ctx.getSharedPreferences("state", Context.MODE_PRIVATE).edit().putBoolean("askedNotify", true).apply() })
     offer?.let { (id, nm, ins) -> OfferRepeatDialog(id, nm, ins, api, { offer = null }, { offer = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) }
     lifeFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> LifeSheet(ag, api, { lifeFor = null }, { lifeFor = null }) } }
     repeatFor?.let { id -> agents?.firstOrNull { it.id == id }?.let { ag -> RepeatSheet(ag, (jobs ?: emptyList()).filter { it.agentId == id }, srv?.tz ?: java.util.TimeZone.getDefault().id, api, { repeatFor = null }, { repeatFor = null; scope.launch { try { jobs = withContext(Dispatchers.IO) { api.jobs() } } catch (_: ApiError) {} } }) } }
@@ -436,6 +440,7 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
     var alive by remember { mutableStateOf(s?.autonomous ?: false) }
     var browser by remember { mutableStateOf(s?.browser ?: false) }
     var billing by remember { mutableStateOf(s?.billing ?: "") }
+    var orders by remember { mutableStateOf(agent?.orders?.joinToString("\n") ?: "") }
     var autonomy by remember { mutableStateOf(s?.autonomy ?: "safe") }; var osTools by remember { mutableStateOf(s?.osTools ?: true) }
     var cap by remember { mutableStateOf(s?.dailyCap?.toString() ?: "") }; var workdir by remember { mutableStateOf(s?.workdir ?: "") }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
@@ -452,6 +457,8 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
             OutlinedTextField(custom, { custom = it }, Modifier.fillMaxWidth(), label = { Text("Or type any model id") }, placeholder = { Text("claude-opus-5-5") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth(), label = { Text("Instructions") }, minLines = 3, shape = RoundedCornerShape(12.dp))
             Muted("Describe the agent's job here. To make it work by itself, for example every morning, save it and then press Repeat in its chat.")
+            OutlinedTextField(orders, { orders = it }, Modifier.fillMaxWidth(), label = { Text("Rules it follows from now on (one per line)") }, placeholder = { Text("For example: Always answer in Dutch.") }, minLines = 2, shape = RoundedCornerShape(12.dp))
+            Muted("You can also just tell the agent in chat, for example \"from now on ...\". It saves the rule here itself.")
             OutlinedTextField(memory, { memory = it }, Modifier.fillMaxWidth(), label = { Text("Memory") }, minLines = 2, shape = RoundedCornerShape(12.dp))
             OutlinedTextField(mcp, { mcp = it }, Modifier.fillMaxWidth(), label = { Text("Tools (MCP file on the server)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Lives on its own", fontWeight = FontWeight.SemiBold); Muted("Wakes up by itself, thinks, acts and decides when to wake next, all the time") }
@@ -477,7 +484,7 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
                 Button({
                     if (name.isBlank()) { err = "Give the agent a name."; return@Button }
                     busy = true
-                    scope.launch { try { val sp2 = spec(); val id = withContext(Dispatchers.IO) { api.save(agent?.id, sp2) }; onSaved(id, sp2) } catch (e: ApiError) { err = "Couldn't save: ${e.message}. Try again."; busy = false } }
+                    scope.launch { try { val sp2 = spec(); val id = withContext(Dispatchers.IO) { val i = api.save(agent?.id, sp2); if (orders != (agent?.orders?.joinToString("\n") ?: "")) api.putOrders(i, orders); i }; onSaved(id, sp2) } catch (e: ApiError) { err = "Couldn't save: ${e.message}. Try again."; busy = false } }
                 }, Modifier.heightIn(min = 48.dp), enabled = !busy, shape = RoundedCornerShape(12.dp)) { Text(if (busy) "Saving…" else "Save") }
             }
         }
@@ -490,3 +497,5 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
 @Composable
 private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
     this.clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onClick)
+
+private val actLastState = androidx.compose.runtime.mutableLongStateOf(0L)

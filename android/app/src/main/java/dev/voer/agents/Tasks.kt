@@ -288,6 +288,7 @@ fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) 
     val scope = rememberCoroutineScope()
     val sp = agent.spec
     var journal by remember { mutableStateOf(agent.journal) }
+    var orders by remember { mutableStateOf(agent.orders.joinToString("\n")) }
     var wakeMin by remember { mutableStateOf(sp.wakeMin.toString()) }; var maxWakes by remember { mutableStateOf(sp.maxWakes.toString()) }
     var err by remember { mutableStateOf("") }
     fun put(patch: Spec) { scope.launch { try { withContext(Dispatchers.IO) { api.save(agent.id, patch) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }
@@ -301,6 +302,8 @@ fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) 
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = cardColors(), border = cardBorder()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(if (agent.running) "Awake right now." else if (agent.nextWake > 0) "Next wake-up: ${wakeText(agent.nextWake)}" + (if (agent.wakeReason.isNotBlank()) " · ${agent.wakeReason}" else "") else "Waking up soon.")
                     Muted("${agent.wakes} wake-up${if (agent.wakes == 1L) "" else "s"} so far" + if (agent.lastWake > 0) " · last ${ago(agent.lastWake)}" else "") } }
+                OutlinedTextField(orders, { orders = it }, Modifier.fillMaxWidth(), label = { Text("Rules it follows from now on (one per line)") }, placeholder = { Text("For example: You may create accounts without asking me.") }, minLines = 2, shape = RoundedCornerShape(12.dp))
+                Muted("You can also just tell the agent in chat, for example \"from now on ...\". It saves the rule here itself.")
                 OutlinedTextField(journal, { journal = it }, Modifier.fillMaxWidth(), label = { Text("Its journal (it writes this itself, you can edit)") }, minLines = 5, shape = RoundedCornerShape(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(wakeMin, { wakeMin = it.filter { c -> c.isDigit() } }, Modifier.weight(1f), label = { Text("Wake at most every (min)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), shape = RoundedCornerShape(12.dp))
@@ -312,7 +315,7 @@ fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 if (sp.autonomous) TextButton({ scope.launch { try { withContext(Dispatchers.IO) { api.wakeNow(agent.id) }; onClose() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Wake up now") }
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Close") }
-                if (sp.autonomous) Button({ scope.launch { try { withContext(Dispatchers.IO) { api.saveJournal(agent.id, journal); api.save(agent.id, sp.copy(wakeMin = (wakeMin.toIntOrNull() ?: 15).coerceAtLeast(1), maxWakes = (maxWakes.toIntOrNull() ?: 24).coerceIn(1, 200))) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
+                if (sp.autonomous) Button({ scope.launch { try { withContext(Dispatchers.IO) { api.saveJournal(agent.id, journal); api.putOrders(agent.id, orders); api.save(agent.id, sp.copy(wakeMin = (wakeMin.toIntOrNull() ?: 15).coerceAtLeast(1), maxWakes = (maxWakes.toIntOrNull() ?: 24).coerceIn(1, 200))) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
             }
         }
     }
@@ -333,4 +336,13 @@ fun OfferRepeatDialog(agentId: Long, name: String, instructions: String, api: Ap
             else { withContext(Dispatchers.IO) { api.saveJob(null, JSONObject().put("agent_id", agentId).put("name", name).put("prompt", "").put("schedule", p.schedule).put("enabled", true).put("fresh", true).put("notify", "always")) }; onDone() }
         } catch (e: ApiError) { err = (e.message ?: "") + " You can use the Repeat button instead." }; busy = false } }, Modifier.heightIn(min = 48.dp), enabled = !busy) { Text(if (busy) "Reading…" else if (parsed == null) "Read the timing" else "Start repeating") } },
         dismissButton = { TextButton(onClose, Modifier.heightIn(min = 48.dp)) { Text("No thanks") } })
+}
+
+/** Asked once, right after connecting: do you want a popup when an agent messages you? */
+@Composable
+fun AskNotifyDialog(onYes: () -> Unit, onNo: () -> Unit) {
+    AlertDialog(onNo, title = { Text("Get a popup when an agent messages you?") },
+        text = { Text("Your agents work on the server by themselves. With this on, your phone shows a popup the moment one of them sends you something. You can change it any time in Settings.") },
+        confirmButton = { TextButton(onYes, Modifier.heightIn(min = 48.dp)) { Text("Turn on") } },
+        dismissButton = { TextButton(onNo, Modifier.heightIn(min = 48.dp)) { Text("Not now") } })
 }

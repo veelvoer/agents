@@ -10,6 +10,8 @@ Run Claude agents on your own server and watch them from your desktop and phone.
 - Agents can **live on their own**: switch on "Lives on its own" and the agent wakes up by itself, thinks about its purpose (its instructions), does things with its tools, keeps a journal, builds and develops things in its own workspace, messages you only when it matters, and chooses when to wake next. You don't schedule anything: it reads its instructions and works out the timing itself.
 - Agents can **use a real web browser** (headless Chrome through Playwright): switch on "Can use a web browser" for an agent and it can open pages, click, type, log in and keep its own cookies between runs. The installer sets the browser up (Node.js and Chrome or Chromium are needed on the server).
 - Pay with your **Claude subscription or your own Anthropic API key**: add the key in Settings (it stays on your server) and choose per agent or as the default. The Usage screen shows real money spent on the key.
+- Tell an agent how to behave **from now on** ("you may create accounts without asking", "always answer in Dutch", "be more active") and it saves that as a standing order that is put in front of it in every future run. You can read and edit the orders in the agent's settings.
+- Popups: the desktop app shows a native popup when an agent messages you (it keeps running in the tray), and the Android app shows a heads-up notification at once.
 - Phone notifications come from the Android app itself, instantly. Telegram, ntfy and web hooks are optional extras.
 - Talk to your agents from Telegram too (optional).
 - Colours follow your computer (GTK/KDE/GNOME theme on Linux, Material You on Android), or use the warm clay colours. Light, dark, text size and reduced motion are in Settings.

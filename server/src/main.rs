@@ -141,6 +141,9 @@ struct Agent {
     wake_log: Vec<u64>,
     #[serde(default)]
     wake_fails: u32,
+    /// Things the user told this agent to do or avoid from now on. Always put in front of the agent, so it cannot forget them.
+    #[serde(default)]
+    orders: Vec<String>,
     #[serde(skip)]
     running: bool,
 }
@@ -479,6 +482,7 @@ struct Info {
     wake_reason: String,
     wakes: u64,
     last_wake: u64,
+    orders: Vec<String>,
 }
 
 fn info(a: &Agent, msgs: usize) -> Info {
@@ -486,7 +490,7 @@ fn info(a: &Agent, msgs: usize) -> Info {
         id: a.id, spec: a.spec.clone(), status: if a.running { "running" } else { "idle" }, usage: a.usage.clone(),
         pinned: a.pinned, order: a.order, last_active: a.last_active, messages: msgs,
         daily: a.daily.iter().rev().take(SHOW_DAYS).rev().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        journal: a.journal.clone(), next_wake: a.next_wake, wake_reason: a.wake_reason.clone(), wakes: a.wakes, last_wake: a.last_wake,
+        journal: a.journal.clone(), next_wake: a.next_wake, wake_reason: a.wake_reason.clone(), wakes: a.wakes, last_wake: a.last_wake, orders: a.orders.clone(),
     }
 }
 
@@ -525,7 +529,7 @@ async fn create(State(s): State<S>, Json(spec): Json<Spec>) -> Json<u64> {
     let id = g.agents.iter().map(|a| a.id).max().map_or(1, |m| m + 1);
     let order = g.agents.iter().map(|a| a.order).max().map_or(0, |m| m + 1);
     let next_wake = if spec.autonomous { Some(now() + 5) } else { None };
-    g.agents.push(Agent { id, spec, usage: Usage::default(), session: None, pinned: false, order, last_active: now(), daily: BTreeMap::new(), messages: vec![], journal: String::new(), next_wake, wake_reason: String::new(), wakes: 0, last_wake: 0, wake_log: vec![], wake_fails: 0, running: false });
+    g.agents.push(Agent { id, spec, usage: Usage::default(), session: None, pinned: false, order, last_active: now(), daily: BTreeMap::new(), messages: vec![], journal: String::new(), next_wake, wake_reason: String::new(), wakes: 0, last_wake: 0, wake_log: vec![], wake_fails: 0, orders: vec![], running: false });
     save(&g, &s.file);
     drop(g);
     bump(&s);
@@ -664,7 +668,7 @@ const DEFAULT_RUN_PROMPT: &str = "It is time for your scheduled run. Do what you
 
 const OS_PREAMBLE: &str = "You are the agent \"{name}\" on an always-on server, working for one person. It is {now}. \
 You have the agentic-os tools: notify (message the user), schedule_task (do something later or on repeat), list_tasks, delete_task, remember (keep a short fact), ask_agent (delegate to another agent). \
-When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. Be brief and concrete.";
+When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. When the user tells you how to behave from now on (always, never, from now on, you may, stop doing, be more active ...), save it at once with add_standing_order, then tell the user exactly what you saved: a promise that is not saved is forgotten. Be brief and concrete.";
 
 fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool) -> Option<PathBuf> {
     // After the binary is replaced while the server runs, Linux reports the old path with a " (deleted)" suffix: use the real path.
@@ -719,7 +723,7 @@ fn looks_limited(t: &str) -> bool {
 }
 
 async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (StatusCode, String)> {
-    let (spec, session, name, settings, cancel, job_notes, journal, api_key) = {
+    let (spec, session, name, settings, cancel, job_notes, journal, api_key, orders) = {
         let mut g = s.db.lock().await;
         let settings = g.settings.clone();
         let job_notes = o.job_id.and_then(|j| g.jobs.iter().find(|x| x.id == j)).map(|j| j.notes.clone()).unwrap_or_default();
@@ -737,7 +741,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         a.last_active = now();
         let cancel = Arc::new(Notify::new());
         s.rt.lock().await.cancel.insert(id, cancel.clone());
-        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes, a.journal.clone(), api_key)
+        (a.spec.clone(), if o.fresh { None } else { a.session.clone() }, a.spec.name.clone(), settings, cancel, job_notes, a.journal.clone(), api_key, a.orders.clone())
     };
     if let Some(l) = &o.label { append_msg(s, id, "auto", l).await; } else { append_msg(s, id, "user", msg).await; }
     bump(s);
@@ -748,6 +752,10 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     if spec.autonomous {
         sp.push_str("\n\nYou live on this server on your own, all the time. Your instructions above are your purpose and your life, not a one-time request: you decide what is worth doing, when, and for how long, and you keep developing things over days and weeks. You have a private workspace folder (your current folder) where your files and projects stay. You also keep a journal that you read every time you wake up. Update it with save_journal when something is worth remembering (plans, what you built, what you learned, what is next). Choose when to wake next with set_next_wake (sleep long when nothing is needed; if your instructions say when to act, such as every morning, schedule exactly that). Only call notify when the user really should hear something. Never ask the user to confirm routine things: decide and act. Your journal:\n");
         sp.push_str(if journal.trim().is_empty() { "(empty: you have just come to life)" } else { journal.trim() });
+    }
+    if !orders.is_empty() {
+        sp.push_str("\n\nSTANDING ORDERS from the user. These always apply, in every run, and they win over everything else above. If two orders disagree, the later one wins:\n");
+        for (i, o) in orders.iter().enumerate() { sp.push_str(&format!("{}. {}\n", i + 1, o)); }
     }
     if !settings.global_memory.is_empty() { sp.push_str("\n\nShared memory (all agents):\n"); sp.push_str(&settings.global_memory); }
     if !spec.memory.is_empty() { sp.push_str("\n\nMemory:\n"); sp.push_str(&spec.memory); }
@@ -1274,6 +1282,69 @@ async fn schedule_parse(State(s): State<S>, Json(r): Json<ParseReq>) -> Result<J
     Ok(Json(json!({"schedule": sch, "human": human, "next": next, "tz": tz})))
 }
 
+// ---------------------------------------------------------------- standing orders
+
+#[derive(Deserialize)]
+struct OrderReq { text: String }
+
+/// Adds one rule ("from now on ...") that the agent follows in every future run.
+async fn order_add(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<OrderReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let text = r.text.trim().replace('\n', " ");
+    if text.is_empty() { return Err((StatusCode::BAD_REQUEST, "an order needs some text".into())); }
+    let mut g = s.db.lock().await;
+    let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
+    if a.orders.len() >= 30 { return Err((StatusCode::BAD_REQUEST, "there are already 30 standing orders: merge or remove some first".into())); }
+    if !a.orders.iter().any(|o| *o == text) { a.orders.push(cut(&text, 600)); }
+    let list = a.orders.clone();
+    save(&g, &s.file);
+    drop(g);
+    bump(&s);
+    Ok(Json(json!({"orders": list})))
+}
+
+#[derive(Deserialize)]
+struct OrdersReq { text: String }
+
+/// Replaces all orders (the apps edit them as one line per rule).
+async fn orders_put(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<OrdersReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut g = s.db.lock().await;
+    let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
+    a.orders = r.text.lines().map(|l| l.trim().trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == ' ').trim().to_string()).filter(|l| !l.is_empty()).take(30).map(|l| cut(&l, 600)).collect();
+    let list = a.orders.clone();
+    save(&g, &s.file);
+    drop(g);
+    bump(&s);
+    Ok(Json(json!({"orders": list})))
+}
+
+async fn order_remove(State(s): State<S>, Path((id, n)): Path<(u64, usize)>) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut g = s.db.lock().await;
+    let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
+    if n == 0 || n > a.orders.len() { return Err((StatusCode::NOT_FOUND, format!("there is no order number {n}"))); }
+    a.orders.remove(n - 1);
+    let list = a.orders.clone();
+    save(&g, &s.file);
+    drop(g);
+    bump(&s);
+    Ok(Json(json!({"orders": list})))
+}
+
+#[derive(Deserialize)]
+struct PaceReq { #[serde(default)] min_minutes: Option<u64>, #[serde(default)] max_per_day: Option<u32> }
+
+/// A living agent may change how often it is allowed to wake up (the user asked it to work more or less).
+async fn pace_set(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<PaceReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut g = s.db.lock().await;
+    let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
+    if let Some(m) = r.min_minutes { a.spec.wake_min = Some(m.clamp(1, 1440)); }
+    if let Some(n) = r.max_per_day { a.spec.max_wakes = Some(n.clamp(1, 200)); }
+    let out = json!({"min_minutes": a.spec.wake_min.unwrap_or(15), "max_per_day": a.spec.max_wakes.unwrap_or(24)});
+    save(&g, &s.file);
+    drop(g);
+    bump(&s);
+    Ok(Json(out))
+}
+
 // ---------------------------------------------------------------- living agents
 
 const WAKE_BASE: u64 = 1 << 40;
@@ -1629,6 +1700,9 @@ async fn main() {
         .route("/agents/{id}/stop", post(stop))
         .route("/agents/{id}/remember", post(remember))
         .route("/agents/{id}/journal", post(journal_put))
+        .route("/agents/{id}/orders", post(order_add).put(orders_put))
+        .route("/agents/{id}/orders/{n}", axum::routing::delete(order_remove))
+        .route("/agents/{id}/pace", post(pace_set))
         .route("/agents/{id}/wake", post(wake_set))
         .route("/agents/{id}/wake-now", post(wake_now))
         .route("/jobs", get(jobs_list).post(jobs_create))

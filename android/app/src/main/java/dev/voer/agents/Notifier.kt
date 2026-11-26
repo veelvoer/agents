@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 object Notifier {
     /** true while the app is on screen: then new results show up inside the app and no pop-up is needed */
     @Volatile var appVisible = false
-    private const val CHANNEL = "agents"
+    private const val CHANNEL = "agents-alerts"
     private const val WORK = "agents-poll"
 
     fun schedule(ctx: Context) {
@@ -29,10 +29,10 @@ object Notifier {
 
     fun show(ctx: Context, e: Act) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Agents", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Messages from your agents", NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(e.title.ifBlank { "Agents" })
-            .setContentText(e.body.take(200)).setStyle(NotificationCompat.BigTextStyle().bigText(e.body.take(1200))).setContentIntent(open).setAutoCancel(true).build()
+            .setContentText(e.body.take(200)).setStyle(NotificationCompat.BigTextStyle().bigText(e.body.take(1200))).setContentIntent(open).setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_MESSAGE).build()
         try { nm.notify(1000 + e.id.toInt(), n) } catch (_: SecurityException) { /* permission was taken away */ }
     }
 }

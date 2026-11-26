@@ -111,7 +111,7 @@ function connectView() {
     if (!p.url || !p.key) { $('#e').textContent = 'Fill in both the address and the key.'; return; }
     $('#go').disabled = true; $('#go').textContent = 'Connecting…'; $('#e').textContent = '';
     conn = p;
-    try { await api('GET', '/agents'); localStorage.setItem('conn', JSON.stringify(conn)); start(); }
+    try { await api('GET', '/agents'); localStorage.setItem('conn', JSON.stringify(conn)); window.shell.setConn(conn); start(); }
     catch (e) { $('#e').textContent = `Couldn't connect: ${e.message}`; $('#go').disabled = false; $('#go').textContent = 'Connect'; }
   };
   $('#go').onclick = go; $$('input', root).forEach((i) => i.addEventListener('keydown', (e) => e.key === 'Enter' && go()));
@@ -172,7 +172,7 @@ function onAgents() {
   // finished work: refresh the open chat, and tell the user if the window is in the background
   for (const a of S.agents) {
     const p = S.prev.get(a.id);
-    if (p && (p.status !== a.status || p.messages !== a.messages)) { if (a.id === S.sel) syncMsgs(a.id); if (p.status === 'running' && a.status === 'idle' && cfg.notify && !document.hasFocus()) { try { new Notification(a.spec.name, { body: 'Finished working.', tag: 'agent-' + a.id }); } catch {} } }
+    if (p && (p.status !== a.status || p.messages !== a.messages)) { if (a.id === S.sel) syncMsgs(a.id);  }
     S.prev.set(a.id, { status: a.status, messages: a.messages });
   }
   if (S.tab === 'agents') { renderSide(); updateHead(); if (S.sel && !byId(S.sel)) { S.sel = null; renderPane(); } } else if (S.tab === 'usage') usageView(); else if (S.tab === 'settings') refreshSettings();
@@ -283,7 +283,7 @@ function confirmBox(title, text, ok, fn) {
 }
 
 function editor(a) {
-  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, browser: false, ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false, browser: false, billing: null };
+  const sp = a ? { autonomy: 'safe', os_tools: true, daily_cap: null, autonomous: false, browser: false, orders: (a.orders || []).join('\n'), ...a.spec, mcp_config: a.spec.mcp_config || '', workdir: a.spec.workdir || '' } : { name: '', model: (S.models.find((m) => /sonnet-5/.test(m[0])) || S.models[0] || ['claude-sonnet-5-5'])[0], prompt: '', memory: '', mcp_config: '', subagents: false, autonomy: 'safe', daily_cap: null, os_tools: true, workdir: '', autonomous: false, browser: false, billing: null, orders: '' };
   const d = document.createElement('div'); d.className = 'scrim';
   const known = () => S.models.some((m) => m[0] === sp.model);
   const draw = () => {
@@ -292,6 +292,7 @@ function editor(a) {
     <div class="field"><span class="label">Model</span><div class="row wrap">${S.models.map((m) => `<button class="chip ${sp.model === m[0] ? 'on' : ''}" data-m="${m[0]}" aria-pressed="${sp.model === m[0]}">${esc(m[1])}</button>`).join('')}</div>
     <input id="cm" placeholder="Or type any model id, e.g. claude-opus-5-5" value="${known() ? '' : esc(sp.model)}" aria-label="Custom model id"></div>
     <div class="field"><label class="label" for="p">Instructions</label><textarea id="p" placeholder="What this agent is for and how it should answer">${esc(sp.prompt)}</textarea><p class="tip">Describe the agent's job here. To make it work by itself, for example every morning, save it and then press Repeat in its chat.</p></div>
+    <div class="field"><label class="label" for="ord">Rules it follows from now on (one per line)</label><textarea id="ord" placeholder="For example: Always answer in Dutch. You may create accounts without asking me.">${esc(sp.orders)}</textarea><p class="tip">You can also just tell the agent in chat, for example "from now on ...". It saves the rule here itself.</p></div>
     <div class="field"><label class="label" for="mem">Memory</label><textarea id="mem" placeholder="Facts it should always remember">${esc(sp.memory)}</textarea></div>
     <div class="field"><label class="label" for="mcp">Tools (MCP file on the server)</label><input id="mcp" placeholder="/home/me/browser-mcp.json" value="${esc(sp.mcp_config)}"></div>
     <div class="row" style="min-height:40px"><span class="grow"><b>Lives on its own</b> <span class="small muted">: wakes up by itself, thinks, acts and decides when to wake next, all the time</span></span><button class="toggle ${sp.autonomous ? 'on' : ''}" id="e-life" role="switch" aria-checked="${!!sp.autonomous}" aria-label="Lives on its own"></button></div>
@@ -304,7 +305,7 @@ function editor(a) {
     <div class="row" style="min-height:40px"><span class="grow">Can start subagents</span><button class="toggle ${sp.subagents ? 'on' : ''}" id="sub" role="switch" aria-checked="${sp.subagents}" aria-label="Can start subagents"></button></div>
     <p id="e" class="err small" role="alert"></p>
     <div class="row">${a ? '<button class="ghost" id="dup">Duplicate</button><button class="ghost" id="del">Delete</button>' : ''}<span class="grow"></span><button class="ghost" id="cancel">Cancel</button><button class="primary" id="save">Save</button></div></div>`;
-    const keep = () => { sp.name = $('#n', d).value; sp.prompt = $('#p', d).value; sp.memory = $('#mem', d).value; sp.mcp_config = $('#mcp', d).value; sp.daily_cap = $('#e-cap', d).value === '' ? null : +$('#e-cap', d).value; sp.workdir = $('#e-wd', d).value; const cm = $('#cm', d).value.trim(); if (cm) sp.model = cm; };
+    const keep = () => { sp.name = $('#n', d).value; sp.prompt = $('#p', d).value; sp.memory = $('#mem', d).value; sp.mcp_config = $('#mcp', d).value; sp.daily_cap = $('#e-cap', d).value === '' ? null : +$('#e-cap', d).value; sp.workdir = $('#e-wd', d).value; if ($('#ord', d)) sp.orders = $('#ord', d).value; const cm = $('#cm', d).value.trim(); if (cm) sp.model = cm; };
     $$('[data-m]', d).forEach((b) => (b.onclick = () => { keep(); sp.model = b.dataset.m; $('#cm', d) && ($('#cm', d).value = ''); draw(); }));
     $$('#e-auto button', d).forEach((b) => (b.onclick = () => { keep(); sp.autonomy = b.dataset.v; draw(); }));
     $('#e-life', d).onclick = () => { keep(); sp.autonomous = !sp.autonomous; if (sp.autonomous && sp.autonomy === 'safe') sp.autonomy = 'standard'; draw(); };
@@ -313,11 +314,11 @@ function editor(a) {
     $('#e-os', d).onclick = () => { keep(); sp.os_tools = !sp.os_tools; draw(); };
     $('#sub', d).onclick = () => { keep(); sp.subagents = !sp.subagents; draw(); };
     $('#cancel', d).onclick = () => d.remove();
-    const body = () => ({ ...sp, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null, workdir: sp.workdir.trim() || null, billing: sp.billing || null });
+    const body = () => ({ ...sp, orders: undefined, name: sp.name.trim(), mcp_config: sp.mcp_config.trim() || null, workdir: sp.workdir.trim() || null, billing: sp.billing || null });
     $('#save', d).onclick = async () => {
       keep(); if (!sp.name.trim()) { $('#e', d).textContent = 'Give the agent a name.'; return; }
       $('#save', d).disabled = true;
-      try { let id = a ? a.id : 0; if (a) await api('PUT', `/agents/${a.id}`, body()); else { id = await api('POST', '/agents', body()); S.sel = id; } d.remove(); if (S.tab === 'agents') renderPane(); setTimeout(() => offerRepeat({ id, spec: body() }), 300); }
+      try { let id = a ? a.id : 0; if (a) await api('PUT', `/agents/${a.id}`, body()); else { id = await api('POST', '/agents', body()); S.sel = id; } if ((sp.orders || '') !== (a ? (a.orders || []).join('\n') : '')) await api('PUT', `/agents/${id}/orders`, { text: sp.orders || '' }); d.remove(); if (S.tab === 'agents') renderPane(); setTimeout(() => offerRepeat({ id, spec: body() }), 300); }
       catch (e) { $('#e', d).textContent = `Couldn't save: ${e.message}. Try again.`; $('#save', d).disabled = false; }
     };
     $('#dup', d)?.addEventListener('click', async () => { keep(); try { S.sel = await api('POST', '/agents', { ...body(), name: sp.name.trim() + ' copy' }); d.remove(); renderPane(); toast('Duplicated'); } catch (e) { $('#e', d).textContent = e.message; } });
@@ -364,7 +365,11 @@ function settingsView() {
   <div class="setrow"><span class="grow">Text size</span><input type="range" id="s-size" min="13" max="19" step="1" value="${cfg.textSize}" aria-label="Text size"><span class="small muted" style="width:36px">${cfg.textSize}px</span></div>
   <div class="setrow"><span class="grow">Animations</span>${seg('s-motion', [['full', 'On'], ['reduced', 'Reduced']], cfg.motion)}</div></div>
   ${autoSettingsHtml()}
-  <div class="card stack"><div class="label">Pop-ups on this computer</div><div class="setrow"><span class="grow">Show a pop-up for new results and messages while this window is in the background</span>${tog('s-notify', cfg.notify, 'Notify when an agent finishes')}</div></div>
+  <div class="card stack"><div class="label">Pop-ups on this computer</div>
+  <div class="setrow"><span class="grow">Show a popup when an agent messages me or finishes something</span>${tog('s-notify', S.prefs ? S.prefs.notify : true, 'Show popups')}</div>
+  <div class="setrow"><span class="grow">Keep running in the background when I close the window, so popups still arrive</span>${tog('s-bg', S.prefs ? S.prefs.background : true, 'Keep running in the background')}</div>
+  <div class="setrow"><span class="grow">Start Agents when I log in</span>${tog('s-start', S.prefs ? !!S.prefs.autostart : false, 'Start when I log in')}</div>
+  <p class="tip">${S.prefs && S.prefs.tray ? 'Closing the window hides Agents in the system tray. Use the tray icon to open it again or to quit.' : 'There is no system tray on this desktop, so closing the window quits the app and popups stop. Keep the window open (or minimised) to keep getting popups.'}</p></div>
   <div class="card stack"><div class="label">Window</div><div class="setrow"><span class="grow">Use the normal system window frame (turn this on if typing or clicking ever misbehaves)</span>${tog('s-frame', !!S.framed, 'Use the system window frame')}</div></div>
   <div class="card stack"><div class="label">Updates</div>
   <div class="setrow"><span class="grow">This app: <b>${esc(u?.current || '…')}</b>${u?.ok ? (u.available ? ` · version <b>${esc(u.latest)}</b> is ready` : ' · up to date') : u ? ` · ${esc(u.error)}` : ''}</span>
@@ -382,13 +387,14 @@ function settingsView() {
   const setSeg = (id, key) => $$(`#${id} button`).forEach((b) => (b.onclick = () => { cfg[key] = b.dataset.v; saveCfg(); applyTheme(); settingsView(); }));
   setSeg('s-colors', 'colors'); setSeg('s-mode', 'mode'); setSeg('s-motion', 'motion');
   $('#s-size').oninput = (e) => { cfg.textSize = +e.target.value; saveCfg(); applyTheme(); }; $('#s-size').onchange = settingsView;
-  $('#s-notify').onclick = async () => { cfg.notify = !cfg.notify; if (cfg.notify && Notification.permission === 'default') await Notification.requestPermission(); saveCfg(); settingsView(); };
+  const pref = (k) => async () => { S.prefs = { ...(S.prefs || { notify: true, background: true }), [k]: !(S.prefs ? S.prefs[k] : k !== 'autostart') }; await window.shell.setPrefs({ [k]: S.prefs[k] }); settingsView(); };
+  $('#s-notify').onclick = pref('notify'); $('#s-bg').onclick = pref('background'); $('#s-start').onclick = pref('autostart');
   $('#s-frame').onclick = () => window.shell.setFrame(!S.framed);
   $('#s-auto').onclick = () => { cfg.autoUpdate = !cfg.autoUpdate; saveCfg(); settingsView(); };
   $('#s-check').onclick = () => checkUpdates(true);
   $('#s-upd')?.addEventListener('click', () => (S.upd.canInstall ? doUpdate() : window.shell.openExternal(S.upd.page)));
   $('#s-srv')?.addEventListener('click', () => confirmBox('Update the server?', 'The server restarts for a few seconds. Agents that are working at that moment stop.', 'Update', async () => { const r = await api('POST', '/admin/update'); toast(`Updating the server to ${r.to.replace('agents-server ', '')}…`); setTimeout(loadHealth, 6000); }));
-  $('#s-out').onclick = () => { localStorage.removeItem('conn'); conn = null; running = false; ctl?.abort(); S.agents = null; S.rev = 0; connectView(); };
+  $('#s-out').onclick = () => { localStorage.removeItem('conn'); window.shell.setConn(null); conn = null; running = false; ctl?.abort(); S.agents = null; S.rev = 0; connectView(); };
   bindAutoSettings();
   $('#s-gh').onclick = (e) => { e.preventDefault(); window.shell.openExternal('https://github.com/veelvoer/agents'); };
 }
@@ -409,7 +415,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) ctl?.
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
 async function start() {
-  S.agents = null; S.err = ''; S.rev = 0;
+  S.agents = null; S.err = ''; S.rev = 0; window.shell.setConn(conn);
+  window.shell.getPrefs().then((p) => { S.prefs = p; if (S.tab === 'settings') settingsView(); });
   try { S.models = await api('GET', '/models'); } catch { S.models = []; }
   mainShell(); running = true; loadList(); loadHealth(); refreshJobs(); fetchActivity();
   api('GET', '/settings').then(async (v) => { S.srv = v; S.paused = v.paused; if (v.tz === 'UTC' && BROWSER_TZ !== 'UTC' && !localStorage.getItem('tzAsked')) { localStorage.setItem('tzAsked', '1'); try { S.srv = await api('PUT', '/settings', { tz: BROWSER_TZ }); toast(`Time zone set to ${BROWSER_TZ}. Change it in Settings.`); } catch {} } }).catch(() => {});

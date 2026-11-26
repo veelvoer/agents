@@ -222,6 +222,7 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
     var ntfyS by remember(srv.ntfyServer) { mutableStateOf(srv.ntfyServer) }; var ntfyT by remember(srv.ntfyTopic) { mutableStateOf(srv.ntfyTopic) }
     var hook by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    var mAddr by remember(srv.mailAddr) { mutableStateOf(srv.mailAddr) }; var mPass by remember { mutableStateOf("") }
     SectionCard {
         Label("Who pays")
         Text("Agents use by default"); Segmented(listOf("subscription" to "My Claude subscription", "api" to "My API key"), srv.defaultBilling) { v -> if (v == "api" && !srv.apiKeySet) note = "Add your API key first." else put(JSONObject().put("default_billing", v), "Saved") }
@@ -237,6 +238,22 @@ fun AutoSettings(api: Api, srv: SrvSettings?, prefs: Prefs, onPrefs: (Prefs) -> 
                 if (bad.isNotEmpty()) { onSrv(withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("api_key", "")) }); note = bad } else { note = "The key works and is saved."; apiKey = "" } } catch (e: ApiError) { note = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save and test") }
         }
         Muted("The subscription is a flat price with shared limits. An API key is pay as you go: every run costs real money, with no subscription limits. The key stays on your server and is never shown again. You can also choose for each agent separately in its settings.")
+    }
+    SectionCard {
+        Label("Agents' mailbox")
+        if (srv.mailSet) {
+            Text("Mailbox ${srv.mailAddr}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ scope.launch { note = try { withContext(Dispatchers.IO) { api.testMail() }.ifEmpty { "The mailbox works." } } catch (e: ApiError) { e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Test") }
+                OutlinedButton({ put(JSONObject().put("mail_addr", ""), "Mailbox removed") }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Remove") }
+            }
+        } else {
+            OutlinedTextField(mAddr, { mAddr = it }, Modifier.fillMaxWidth(), label = { Text("Email address") }, placeholder = { Text("me@gmail.com") }, singleLine = true, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = androidx.compose.ui.text.input.KeyboardType.Email), shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(mPass, { mPass = it }, Modifier.fillMaxWidth(), label = { Text("App password") }, singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), shape = RoundedCornerShape(12.dp))
+            Button({ if (mAddr.isNotBlank() && mPass.isNotBlank()) scope.launch { try { onSrv(withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("mail_addr", mAddr.trim()).put("mail_pass", mPass.trim())) }); val bad = withContext(Dispatchers.IO) { api.testMail() }
+                if (bad.isNotEmpty()) { onSrv(withContext(Dispatchers.IO) { api.putSettings(JSONObject().put("mail_addr", "")) }); note = bad } else { note = "The mailbox works and is saved."; mPass = "" } } catch (e: ApiError) { note = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save and test") }
+        }
+        Muted("Living agents use this address to sign up for services, read their own verification mails and send mail. For Gmail turn on 2-step verification and create an app password. It stays on your server.")
     }
     SectionCard {
         Label("Repeating agents")

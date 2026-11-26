@@ -17,6 +17,15 @@ fn call(method: &str, path: &str, body: Option<Value>, timeout: u64) -> Result<V
 
 fn tools() -> Value {
     let mut v = base_tools();
+    if std::env::var("AGENT_MAIL").as_deref() == Ok("1") {
+        v.as_array_mut().unwrap().extend([
+            json!({"name": "list_mail", "description": "List the newest emails in your own mailbox (id, from, subject, date). Use query for a Gmail search such as 'from:github newer_than:1d' or 'subject:verify'. Use it right after you sign up somewhere to find the verification mail.", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer"}, "query": {"type": "string"}, "unread": {"type": "boolean"}}}}),
+            json!({"name": "read_mail", "description": "Read one email by its id from list_mail: the text with all links ([url]) so you can find codes and confirmation links.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}}),
+            json!({"name": "send_mail", "description": "Send a plain-text email from your own address.", "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}, "required": ["to", "subject", "body"]}}),
+            json!({"name": "vault_save", "description": "Save a login you created or were given (service, username, password, note). Your private password vault; always save a new account here right away.", "inputSchema": {"type": "object", "properties": {"service": {"type": "string"}, "username": {"type": "string"}, "password": {"type": "string"}, "note": {"type": "string"}}, "required": ["service", "username", "password"]}}),
+            json!({"name": "vault_get", "description": "Look up your saved logins. Optionally filter by service name. Returns username and password.", "inputSchema": {"type": "object", "properties": {"service": {"type": "string"}}}}),
+        ]);
+    }
     if std::env::var("AGENT_AUTONOMOUS").as_deref() == Ok("1") {
         v.as_array_mut().unwrap().extend([
             json!({"name": "set_my_pace", "description": "Change how often you are allowed to wake up: the fewest minutes between wake-ups and the most wake-ups per day (up to 200). Use it when the user asks you to be more or less active. Then also use set_next_wake to wake sooner or later.", "inputSchema": {"type": "object", "properties": {"min_minutes": {"type": "integer"}, "max_per_day": {"type": "integer"}}}}),
@@ -63,6 +72,21 @@ fn run_tool(name: &str, a: &Value) -> Result<String, String> {
         "schedule_task" => {
             let r = call("POST", "/jobs", Some(json!({"agent_id": me, "name": s("name"), "prompt": s("prompt"), "notes": if a["notes"].is_string() { json!(s("notes")) } else { Value::Null }, "when": s("when"), "notify": if a["notify"].is_string() { s("notify") } else { "always".into() }, "fresh": true})), 30)?;
             Ok(format!("Scheduled (task {}). {}", r["id"], r["human"].as_str().unwrap_or("")) + &r["next"].as_str().map(|n| format!(" Next run: {n}.")).unwrap_or_default())
+        }
+        "list_mail" => {
+            let r = call("POST", "/mail/inbox", Some(json!({"count": a["count"], "query": a["query"], "unread": a["unread"]})), 90)?;
+            let l = r.as_array().cloned().unwrap_or_default();
+            if l.is_empty() { return Ok("No messages found.".into()); }
+            Ok(l.iter().map(|m| format!("#{} | {} | {} | {}", m["id"], m["from"].as_str().unwrap_or(""), m["subject"].as_str().unwrap_or(""), m["date"].as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n"))
+        }
+        "read_mail" => { let r = call("POST", "/mail/read", Some(json!({"id": a["id"]})), 90)?; Ok(r["text"].as_str().unwrap_or("").to_string()) }
+        "send_mail" => { call("POST", "/mail/send", Some(json!({"to": s("to"), "subject": s("subject"), "body": s("body")})), 90)?; Ok("Sent.".into()) }
+        "vault_save" => { call("POST", &format!("/agents/{me}/vault"), Some(json!({"service": s("service"), "username": s("username"), "password": s("password"), "note": s("note")})), 30)?; Ok("Saved in your vault.".into()) }
+        "vault_get" => {
+            let r = call("GET", &format!("/agents/{me}/vault"), None, 30)?;
+            let f = s("service").to_lowercase();
+            let l: Vec<String> = r.as_array().cloned().unwrap_or_default().iter().filter(|e| f.is_empty() || e["service"].as_str().unwrap_or("").to_lowercase().contains(&f)).map(|e| format!("{} | {} | {} | {}", e["service"].as_str().unwrap_or(""), e["username"].as_str().unwrap_or(""), e["password"].as_str().unwrap_or(""), e["note"].as_str().unwrap_or(""))).collect();
+            Ok(if l.is_empty() { "Nothing saved yet.".into() } else { l.join("\n") })
         }
         "save_task_notes" => {
             let job: u64 = std::env::var("AGENT_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(0);

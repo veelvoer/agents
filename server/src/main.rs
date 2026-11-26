@@ -1,4 +1,5 @@
 mod curlx;
+mod mail;
 mod mcp;
 
 use axum::{
@@ -232,9 +233,14 @@ struct Settings {
     /// "subscription" or "api": what agents use when they do not choose themselves.
     #[serde(default)]
     default_billing: String,
+    /// The agents' own mailbox (address + app password). Stays on this server.
+    #[serde(default)]
+    mail_addr: String,
+    #[serde(default)]
+    mail_pass: String,
 }
 impl Default for Settings {
-    fn default() -> Self { Settings { paused: false, pause_until: 0, max_parallel: 2, tz: std::env::var("TZ").unwrap_or_else(|_| "UTC".into()), global_memory: String::new(), notify: NotifyCfg::default(), api_key: String::new(), default_billing: String::new() } }
+    fn default() -> Self { Settings { paused: false, pause_until: 0, max_parallel: 2, tz: std::env::var("TZ").unwrap_or_else(|_| "UTC".into()), global_memory: String::new(), notify: NotifyCfg::default(), api_key: String::new(), default_billing: String::new(), mail_addr: String::new(), mail_pass: String::new() } }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -681,14 +687,14 @@ const OS_PREAMBLE: &str = "You are the agent \"{name}\" on an always-on server, 
 You have the agentic-os tools: notify (message the user), schedule_task (do something later or on repeat), list_tasks, delete_task, remember (keep a short fact), ask_agent (delegate to another agent). \
 When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. When the user tells you how to behave from now on (always, never, from now on, you may, stop doing, be more active ...), save it at once with add_standing_order, then tell the user exactly what you saved: a promise that is not saved is forgotten. Be brief and concrete.";
 
-fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool) -> Option<PathBuf> {
+fn mcp_config_for(s: &S, id: u64, depth: u32, job: Option<u64>, autonomous: bool, mail: bool) -> Option<PathBuf> {
     // After the binary is replaced while the server runs, Linux reports the old path with a " (deleted)" suffix: use the real path.
     let exe = std::env::current_exe().ok().map(|p| { let t = p.to_string_lossy().to_string(); PathBuf::from(t.strip_suffix(" (deleted)").unwrap_or(&t)) })?;
     let port = s.addr.rsplit(':').next().unwrap_or("7777");
     let dir = data_dir(s).join("mcp");
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{id}-d{depth}-j{}.json", job.unwrap_or(0)));
-    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string(), "AGENT_JOB": job.unwrap_or(0).to_string(), "AGENT_AUTONOMOUS": if autonomous { "1" } else { "0" }}}}});
+    let cfg = json!({"mcpServers": {"agentic-os": {"command": exe, "args": ["mcp"], "env": {"AGENTS_URL": format!("http://127.0.0.1:{port}"), "AGENTS_TOKEN": s.token.as_str(), "AGENT_MAIL": if mail { "1" } else { "0" }, "AGENT_ID": id.to_string(), "AGENT_DEPTH": depth.to_string(), "AGENT_JOB": job.unwrap_or(0).to_string(), "AGENT_AUTONOMOUS": if autonomous { "1" } else { "0" }}}}});
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).ok()?;
     f.write_all(cfg.to_string().as_bytes()).ok()?;
@@ -758,6 +764,7 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     bump(s);
 
     let tz = tz_of(&settings.tz, "UTC");
+    let mailbox = if !settings.mail_addr.is_empty() && !settings.mail_pass.is_empty() && spec.os_tools { Some(mail::Mailbox::new(&settings.mail_addr, &settings.mail_pass)) } else { None };
     let mut sp = spec.prompt.clone();
     if spec.os_tools { sp.push_str("\n\n"); sp.push_str(&OS_PREAMBLE.replace("{name}", &name).replace("{now}", &chrono::Utc::now().with_timezone(&tz).format("%A %Y-%m-%d %H:%M (%Z)").to_string())); }
     if spec.autonomous {
@@ -765,6 +772,9 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
         sp.push_str(if journal.trim().is_empty() { "(empty: you have just come to life)" } else { journal.trim() });
         sp.push_str("\n\n");
         sp.push_str(INDEPENDENCE);
+    }
+    if let Some(m) = &mailbox {
+        sp.push_str(&format!("\n\nYOUR EMAIL: you have your own mailbox, {}. It is yours to use as your identity on the internet: sign up for services and accounts with it, and use the tools list_mail and read_mail to fetch verification codes and confirmation links yourself, and send_mail to write to people. Save every account you create with vault_save (service, username, a strong unique random password you generate, note), and look passwords up with vault_get or vault_list when you need to log in again. Never put passwords in your journal or in messages. Accounts you have: {}. Rules: never spend money or enter payment details, never use another person's identity, be honest that you are an AI agent where a service asks, follow each service's terms, and keep the user informed of the accounts you opened in your daily message.", m.addr, vault_names(s, id)));
     }
     if !orders.is_empty() {
         sp.push_str("\n\nSTANDING ORDERS from the user. These always apply, in every run, and they win over everything else above. If two orders disagree, the later one wins:\n");
@@ -782,8 +792,8 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
 
     let workdir = spec.workdir.clone().filter(|w| !w.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir(s).join("workspaces").join(id.to_string()));
     let _ = std::fs::create_dir_all(&workdir);
-    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id, spec.autonomous) } else { None };
-    let browser_cfg = if spec.browser { match browser_config_for(s, id) { Ok(p) => Some(p), Err(e) => { sp.push_str(&format!("\n\nYour web browser is not available right now: {e}. Do not pretend to browse; say that it is unavailable if you need it.")); None } } } else { None };
+    let os_cfg = if spec.os_tools { mcp_config_for(s, id, o.depth, o.job_id, spec.autonomous, mailbox.is_some()) } else { None };
+    let browser_cfg = if spec.browser || (spec.autonomous && mailbox.is_some()) { match browser_config_for(s, id) { Ok(p) => Some(p), Err(e) => { sp.push_str(&format!("\n\nYour web browser is not available right now: {e}. Do not pretend to browse; say that it is unavailable if you need it.")); None } } } else { None };
     if browser_cfg.is_some() { sp.push_str("\n\nYou have a real web browser (tools starting with browser_). It keeps its own cookies, so a login stays between runs. Work step by step: open the page, read the snapshot, act. Save any password or secret you create only in a file with mode 600 in your workspace, never in your journal or in messages."); }
 
     let build = |resume: Option<&str>| {
@@ -1486,6 +1496,7 @@ fn settings_json(st: &Settings) -> Value {
         "ntfy": {"server": st.notify.ntfy_server, "topic": st.notify.ntfy_topic},
         "webhook": {"set": !st.notify.webhook_url.is_empty()},
         "api_key_set": !st.api_key.is_empty(), "api_key_tail": st.api_key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<String>(),
+        "mail": {"addr": st.mail_addr, "set": !st.mail_addr.is_empty() && !st.mail_pass.is_empty()},
         "default_billing": if st.default_billing == "api" { "api" } else { "subscription" },
     })
 }
@@ -1509,6 +1520,8 @@ async fn settings_put(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<V
         if let Some(v) = r["ntfy_topic"].as_str() { st.notify.ntfy_topic = v.trim().into(); }
         if let Some(v) = r["webhook_url"].as_str() { st.notify.webhook_url = v.trim().into(); }
         if let Some(v) = r["api_key"].as_str() { let v = v.trim(); if !v.is_empty() && !v.starts_with("sk-") { return Err((StatusCode::BAD_REQUEST, "That does not look like an Anthropic API key (it starts with sk-ant-).".into())); } st.api_key = v.into(); if v.is_empty() && st.default_billing == "api" { st.default_billing = String::new(); } }
+        if let Some(v) = r["mail_addr"].as_str() { let v = v.trim(); if !v.is_empty() && !v.contains('@') { return Err((StatusCode::BAD_REQUEST, "That is not an email address.".into())); } st.mail_addr = v.into(); if v.is_empty() { st.mail_pass.clear(); } }
+        if let Some(v) = r["mail_pass"].as_str() { let v = v.trim(); if !v.is_empty() { st.mail_pass = v.chars().filter(|c| !c.is_whitespace()).collect(); } }
         if let Some(v) = r["default_billing"].as_str() { if v == "api" && st.api_key.is_empty() { return Err((StatusCode::BAD_REQUEST, "Add your API key first.".into())); } st.default_billing = if v == "api" { "api".into() } else { String::new() }; }
         if let Some(v) = r["telegram_token"].as_str() {
             let v = v.trim();
@@ -1536,6 +1549,53 @@ async fn api_key_test(State(s): State<S>) -> Json<Value> {
         Ok((code, t)) => { let m = serde_json::from_str::<Value>(&t).ok().and_then(|v| v["error"]["message"].as_str().map(String::from)).unwrap_or_default(); Json(json!({"ok": false, "error": format!("Anthropic answered {code}. {}", cut(&m, 160))})) }
         Err(e) => Json(json!({"ok": false, "error": format!("Could not reach Anthropic: {e}")})),
     }
+}
+
+// ---------------------------------------------------------------- mailbox and password vault
+
+fn vault_path(s: &S, id: u64) -> PathBuf { data_dir(s).join("vault").join(format!("{id}.json")) }
+fn vault_read(s: &S, id: u64) -> Vec<Value> { std::fs::read_to_string(vault_path(s, id)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default() }
+fn vault_names(s: &S, id: u64) -> String {
+    let v = vault_read(s, id);
+    if v.is_empty() { "none yet".into() } else { v.iter().map(|e| format!("{} ({})", e["service"].as_str().unwrap_or("?"), e["username"].as_str().unwrap_or(""))).collect::<Vec<_>>().join(", ") }
+}
+async fn vault_save(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    let service = r["service"].as_str().unwrap_or("").trim().to_string();
+    if service.is_empty() { return Err((StatusCode::BAD_REQUEST, "service is needed".into())); }
+    let mut v = vault_read(&s, id);
+    v.retain(|e| !(e["service"].as_str() == Some(&service) && e["username"].as_str() == r["username"].as_str()));
+    v.push(json!({"service": service, "username": r["username"].as_str().unwrap_or(""), "password": r["password"].as_str().unwrap_or(""), "note": r["note"].as_str().unwrap_or(""), "saved": now()}));
+    let p = vault_path(&s, id);
+    let _ = std::fs::create_dir_all(p.parent().unwrap());
+    std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default()).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)); }
+    Ok(Json(json!({"ok": true})))
+}
+/// Lists all saved logins of one agent (with passwords: only the agent itself and the user's token can reach this).
+async fn vault_list(State(s): State<S>, Path(id): Path<u64>) -> Json<Value> { Json(json!(vault_read(&s, id))) }
+
+async fn mailbox_of(s: &S) -> Result<mail::Mailbox, (StatusCode, String)> {
+    let g = s.db.lock().await;
+    if g.settings.mail_addr.is_empty() || g.settings.mail_pass.is_empty() { return Err((StatusCode::BAD_REQUEST, "No mailbox is set up. The user can add a Gmail address and app password in Settings.".into())); }
+    Ok(mail::Mailbox::new(&g.settings.mail_addr, &g.settings.mail_pass))
+}
+async fn mail_test(State(s): State<S>) -> Json<Value> {
+    match mailbox_of(&s).await { Ok(m) => match m.test().await { Ok(_) => Json(json!({"ok": true})), Err(e) => Json(json!({"ok": false, "error": e})) }, Err((_, e)) => Json(json!({"ok": false, "error": e})) }
+}
+async fn mail_inbox(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    let m = mailbox_of(&s).await?;
+    let list = m.list(r["count"].as_u64().unwrap_or(10) as usize, r["query"].as_str().unwrap_or(""), r["unread"].as_bool().unwrap_or(false)).await.map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(json!(list.iter().map(|(uid, from, subj, date)| json!({"id": uid, "from": from, "subject": subj, "date": date})).collect::<Vec<_>>())))
+}
+async fn mail_read(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    let m = mailbox_of(&s).await?;
+    let t = m.read(r["id"].as_u64().unwrap_or(0), 8000).await.map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(json!({"text": t})))
+}
+async fn mail_send(State(s): State<S>, Json(r): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    let m = mailbox_of(&s).await?;
+    m.send(r["to"].as_str().unwrap_or(""), r["subject"].as_str().unwrap_or(""), r["body"].as_str().unwrap_or(""), &data_dir(&s).join("tmp")).await.map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(json!({"ok": true})))
 }
 
 async fn notify_test(State(s): State<S>) -> Json<Value> {
@@ -1730,6 +1790,11 @@ async fn main() {
         .route("/settings", get(settings_get).put(settings_put))
         .route("/settings/test", post(notify_test))
         .route("/settings/api-key/test", post(api_key_test))
+        .route("/settings/mail/test", post(mail_test))
+        .route("/mail/inbox", post(mail_inbox))
+        .route("/mail/read", post(mail_read))
+        .route("/mail/send", post(mail_send))
+        .route("/agents/{id}/vault", get(vault_list).post(vault_save))
         .route("/settings/telegram/pair", post(telegram_pair))
         .route("/settings/telegram", axum::routing::delete(telegram_unlink))
         .route("/admin/update", post(self_update))

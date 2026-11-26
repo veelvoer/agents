@@ -20,7 +20,7 @@ data class AgentList(val rev: Long, val agents: List<Agent>, val actLast: Long =
 data class Job(val id: Long, val agentId: Long, val agent: String, val name: String, val prompt: String, val human: String, val enabled: Boolean, val fresh: Boolean, val notify: String,
                val next: String?, val lastRun: Long, val lastStatus: String?, val lastText: String, val runs: Int, val cost: Double, val hook: String?, val running: Boolean, val schedule: JSONObject, val notes: String = "")
 data class Act(val id: Long, val at: Long, val kind: String, val agentId: Long, val jobId: Long, val title: String, val body: String)
-data class SrvSettings(val paused: Boolean, val maxParallel: Int, val tz: String, val memory: String, val tgToken: Boolean, val tgPaired: Boolean, val tgCode: String?, val ntfyServer: String, val ntfyTopic: String, val webhook: Boolean, val apiKeySet: Boolean = false, val apiKeyTail: String = "", val defaultBilling: String = "subscription")
+data class SrvSettings(val paused: Boolean, val maxParallel: Int, val tz: String, val memory: String, val tgToken: Boolean, val tgPaired: Boolean, val tgCode: String?, val ntfyServer: String, val ntfyTopic: String, val webhook: Boolean, val apiKeySet: Boolean = false, val apiKeyTail: String = "", val defaultBilling: String = "subscription", val mailAddr: String = "", val mailSet: Boolean = false)
 
 class Api(val url: String, val key: String) {
     private fun call(method: String, path: String, body: String? = null, timeoutMs: Int = 20_000): String {
@@ -79,8 +79,9 @@ class Api(val url: String, val key: String) {
     fun settings(): SrvSettings = JSONObject(call("GET", "/settings")).let { parseSettings(it) }
     fun putSettings(body: JSONObject): SrvSettings = parseSettings(JSONObject(call("PUT", "/settings", body.toString())))
     private fun parseSettings(d: JSONObject): SrvSettings { val t = d.getJSONObject("telegram"); val n = d.getJSONObject("ntfy")
-        return SrvSettings(d.optBoolean("paused"), d.optInt("max_parallel", 2), d.optString("tz", "UTC"), d.optString("global_memory"), t.optBoolean("token_set"), t.optBoolean("paired"), if (t.isNull("pair_code")) null else t.optString("pair_code"), n.optString("server"), n.optString("topic"), d.getJSONObject("webhook").optBoolean("set"), d.optBoolean("api_key_set"), d.optString("api_key_tail"), d.optString("default_billing", "subscription")) }
+        return SrvSettings(d.optBoolean("paused"), d.optInt("max_parallel", 2), d.optString("tz", "UTC"), d.optString("global_memory"), t.optBoolean("token_set"), t.optBoolean("paired"), if (t.isNull("pair_code")) null else t.optString("pair_code"), n.optString("server"), n.optString("topic"), d.getJSONObject("webhook").optBoolean("set"), d.optBoolean("api_key_set"), d.optString("api_key_tail"), d.optString("default_billing", "subscription"), d.optJSONObject("mail")?.optString("addr") ?: "", d.optJSONObject("mail")?.optBoolean("set") ?: false) }
     fun testNotify(): String { val r = JSONObject(call("POST", "/settings/test", "{}")); return if (r.optBoolean("ok")) "" else r.optJSONArray("errors")?.let { e -> (0 until e.length()).joinToString("; ") { e.getString(it) } } ?: "failed" }
+    fun testMail(): String { val r = JSONObject(call("POST", "/settings/mail/test", "{}", 90_000)); return if (r.optBoolean("ok")) "" else r.optString("error", "The mailbox did not work.") }
     fun testApiKey(): String { val r = JSONObject(call("POST", "/settings/api-key/test", "{}", 60_000)); return if (r.optBoolean("ok")) "" else r.optString("error", "The key did not work.") }
     fun telegramPair() { call("POST", "/settings/telegram/pair", "{}") }
     fun telegramUnlink() { call("DELETE", "/settings/telegram") }

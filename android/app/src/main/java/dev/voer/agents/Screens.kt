@@ -444,7 +444,7 @@ fun EditorSheet(agent: Agent?, models: List<Pair<String, String>>, api: Api, onC
     var autonomy by remember { mutableStateOf(s?.autonomy ?: "safe") }; var osTools by remember { mutableStateOf(s?.osTools ?: true) }
     var cap by remember { mutableStateOf(s?.dailyCap?.toString() ?: "") }; var workdir by remember { mutableStateOf(s?.workdir ?: "") }
     var err by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var confirmDelete by remember { mutableStateOf(false) }
-    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir, alive, s?.wakeMin ?: 15, s?.maxWakes ?: 24, browser, billing)
+    fun spec() = Spec(name.trim(), custom.trim().ifEmpty { model }, prompt, memory, mcp, subs, autonomy, osTools, cap.toDoubleOrNull(), workdir, alive, s?.wakeMin ?: 5, s?.maxWakes ?: 24, browser, billing)
     ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (agent == null) "New agent" else "Edit agent", style = MaterialTheme.typography.headlineMedium)

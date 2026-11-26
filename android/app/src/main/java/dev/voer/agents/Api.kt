@@ -10,7 +10,7 @@ class ApiError(message: String) : Exception(message)
 data class Usage(val input: Long, val output: Long, val cache: Long, val cost: Double, val apiCost: Double = 0.0) { val tokens get() = input + output }
 data class Spec(val name: String, val model: String, val prompt: String, val memory: String, val mcp: String, val subagents: Boolean,
                 val autonomy: String = "safe", val osTools: Boolean = true, val dailyCap: Double? = null, val workdir: String = "",
-                val autonomous: Boolean = false, val wakeMin: Int = 15, val maxWakes: Int = 24, val browser: Boolean = false, val billing: String = "")
+                val autonomous: Boolean = false, val wakeMin: Int = 5, val maxWakes: Int = 24, val browser: Boolean = false, val billing: String = "")
 data class Agent(val id: Long, val spec: Spec, val running: Boolean, val usage: Usage, val pinned: Boolean, val lastActive: Long, val messages: Int, val daily: Map<String, Double>,
                  val journal: String = "", val nextWake: Long = 0, val wakeReason: String = "", val wakes: Long = 0, val lastWake: Long = 0, val orders: List<String> = emptyList())
 data class Msg(val role: String, val text: String, val at: Long)
@@ -51,7 +51,7 @@ class Api(val url: String, val key: String) {
             val dl = o.optJSONArray("daily") ?: JSONArray()
             Agent(o.getLong("id"), Spec(s.getString("name"), s.getString("model"), s.optString("prompt"), s.optString("memory"), if (s.isNull("mcp_config")) "" else s.optString("mcp_config"), s.optBoolean("subagents"),
                 s.optString("autonomy", "safe"), s.optBoolean("os_tools", true), if (s.isNull("daily_cap") || !s.has("daily_cap")) null else s.optDouble("daily_cap"), if (s.isNull("workdir")) "" else s.optString("workdir"),
-                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 15 else s.optInt("wake_min", 15), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24), s.optBoolean("browser"), if (s.isNull("billing")) "" else s.optString("billing")),
+                s.optBoolean("autonomous"), if (s.isNull("wake_min")) 5 else s.optInt("wake_min", 5), if (s.isNull("max_wakes")) 24 else s.optInt("max_wakes", 24), s.optBoolean("browser"), if (s.isNull("billing")) "" else s.optString("billing")),
                 o.getString("status") == "running", Usage(u.optLong("input_tokens"), u.optLong("output_tokens"), u.optLong("cache_read_tokens"), u.optDouble("cost_usd"), u.optDouble("api_cost", 0.0)),
                 o.optBoolean("pinned"), o.optLong("last_active"), o.optInt("messages"),
                 (0 until dl.length()).associate { i -> dl.getJSONArray(i).let { p -> p.getString(0) to p.getJSONObject(1).optDouble("cost") } },

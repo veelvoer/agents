@@ -666,6 +666,17 @@ struct Out { text: String, ok: bool, limited: bool, cost: f64 }
 
 const DEFAULT_RUN_PROMPT: &str = "It is time for your scheduled run. Do what your instructions say, now.";
 
+
+/// How a living agent works: take initiative, solve problems itself, and only bother the user when it truly must.
+const INDEPENDENCE: &str = "HOW YOU WORK (you are autonomous):\\n\\
+1. You own your goal and decide the next step yourself. Never end a run by only asking the user something or by listing what they should do. End every run having done the next concrete thing, and say what you did and what is next.\\n\\
+2. When something blocks you, solve it yourself first: read the exact error or page, then try at least three different approaches (another tool, another website or service, an official API, a different wording, a small script or program you write or install in your workspace) and look for a different route to the same goal. Only then park it: write \\\"BLOCKED: what, what I tried, why\\\" in your journal, switch to other useful work, and come back later with a new idea.\\n\\
+3. Make choices yourself: names, handles, plans, tools, details. Pick sensible defaults, record them in your journal, and move on. Do not ask the user to decide what you can decide.\\n\\
+4. Ask the user only for what only they can give: money, their own identity documents, a legal agreement, or a check that must be done by a real person. Put every open question in ONE short message, at most once a day, each with your recommended answer so they can simply reply yes. Never stop working while you wait.\\n\\
+5. Do not defeat security checks (CAPTCHAs, phone or ID verification, rate limits, bans) and do not pretend to be a human. If a service demands them, choose another service that accepts automated or agent accounts or has an official API, and carry on there.\\n\\
+6. Check your own work (open the page, run the tests, read the result) before you report. Report results, not plans.\\n\\
+7. If you are in the middle of a task, wake again soon (minutes) to continue; sleep long only when there is truly nothing to do.";
+
 const OS_PREAMBLE: &str = "You are the agent \"{name}\" on an always-on server, working for one person. It is {now}. \
 You have the agentic-os tools: notify (message the user), schedule_task (do something later or on repeat), list_tasks, delete_task, remember (keep a short fact), ask_agent (delegate to another agent). \
 When the user asks for something recurring, for something later, or to be told when you are done, use these tools instead of only saying you will. When the user tells you how to behave from now on (always, never, from now on, you may, stop doing, be more active ...), save it at once with add_standing_order, then tell the user exactly what you saved: a promise that is not saved is forgotten. Be brief and concrete.";
@@ -752,6 +763,8 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     if spec.autonomous {
         sp.push_str("\n\nYou live on this server on your own, all the time. Your instructions above are your purpose and your life, not a one-time request: you decide what is worth doing, when, and for how long, and you keep developing things over days and weeks. You have a private workspace folder (your current folder) where your files and projects stay. You also keep a journal that you read every time you wake up. Update it with save_journal when something is worth remembering (plans, what you built, what you learned, what is next). Choose when to wake next with set_next_wake (sleep long when nothing is needed; if your instructions say when to act, such as every morning, schedule exactly that). Only call notify when the user really should hear something. Never ask the user to confirm routine things: decide and act. Your journal:\n");
         sp.push_str(if journal.trim().is_empty() { "(empty: you have just come to life)" } else { journal.trim() });
+        sp.push_str("\n\n");
+        sp.push_str(INDEPENDENCE);
     }
     if !orders.is_empty() {
         sp.push_str("\n\nSTANDING ORDERS from the user. These always apply, in every run, and they win over everything else above. If two orders disagree, the later one wins:\n");
@@ -806,12 +819,12 @@ async fn run_agent(s: &S, id: u64, msg: &str, o: RunOpts) -> Result<Out, (Status
     for _ in 0..2 {
         let mut c = build(attempt_session.as_deref());
         let out = tokio::select! {
-            r = tokio::time::timeout(Duration::from_secs(900), c.output()) => Some(r),
+            r = tokio::time::timeout(Duration::from_secs(if o.wake { 2400 } else { 900 }), c.output()) => Some(r),
             _ = cancel.notified() => None,
         };
         match out {
             None => { result = None; break; }
-            Some(Err(_)) => { result = Some(Err("Claude took longer than 15 minutes, so I stopped it.".into())); break; }
+            Some(Err(_)) => { result = Some(Err(format!("Claude took longer than {} minutes, so I stopped it.", if o.wake { 40 } else { 15 }))); break; }
             Some(Ok(Err(e))) => { result = Some(Err(format!("Couldn't start claude on the server: {e}. Is Claude Code installed and logged in there?"))); break; }
             Some(Ok(Ok(out))) => {
                 let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
@@ -1338,7 +1351,7 @@ async fn pace_set(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<PaceReq
     let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
     if let Some(m) = r.min_minutes { a.spec.wake_min = Some(m.clamp(1, 1440)); }
     if let Some(n) = r.max_per_day { a.spec.max_wakes = Some(n.clamp(1, 200)); }
-    let out = json!({"min_minutes": a.spec.wake_min.unwrap_or(15), "max_per_day": a.spec.max_wakes.unwrap_or(24)});
+    let out = json!({"min_minutes": a.spec.wake_min.unwrap_or(5), "max_per_day": a.spec.max_wakes.unwrap_or(24)});
     save(&g, &s.file);
     drop(g);
     bump(&s);
@@ -1370,7 +1383,7 @@ async fn wake_set(State(s): State<S>, Path(id): Path<u64>, Json(r): Json<WakeReq
     let parsed = match parse_when(&r.when, &tz) { Ok(x) => x, Err(_) => ai_schedule(&s, &r.when).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?.0 };
     let mut g = s.db.lock().await;
     let a = g.agents.iter_mut().find(|a| a.id == id).ok_or((StatusCode::NOT_FOUND, "no such agent".into()))?;
-    let min = a.spec.wake_min.unwrap_or(15).max(1) * 60;
+    let min = a.spec.wake_min.unwrap_or(5).max(1) * 60;
     let sch = parsed;
     let t = next_at(&sch, now(), &tz).ok_or((StatusCode::BAD_REQUEST, "that time is in the past".to_string()))?;
     let t = t.clamp(now() + min, now() + MAX_WAKE_SECS);
@@ -1435,7 +1448,7 @@ async fn run_wake(s: S, id: u64) {
         wakes + 1,
         if last_wake == 0 { "This is your very first wake: read your instructions carefully, decide your plan, write it in your journal, and begin.".to_string() } else { format!("You were last awake {} minutes ago.", (t0 - last_wake) / 60) },
         if said.is_empty() { "The user has not written to you since.".to_string() } else { format!("The user wrote to you since then:\n- {}", said.join("\n- ")) });
-    let res = run_agent(&s, id, &msg, RunOpts { fresh: true, label: Some(format!("Woke up (wake {})", wakes + 1)), max_turns: Some(30), wake: true, check_cap: true, ..Default::default() }).await;
+    let res = run_agent(&s, id, &msg, RunOpts { fresh: true, label: Some(format!("Woke up (wake {})", wakes + 1)), max_turns: Some(60), wake: true, check_cap: true, ..Default::default() }).await;
     s.rt.lock().await.jobs_running.remove(&(WAKE_BASE + id));
     let t = now();
     let mut note: Option<String> = None;
@@ -1443,7 +1456,7 @@ async fn run_wake(s: S, id: u64) {
     let (kind, text) = {
         let mut g = s.db.lock().await;
         let Some(a) = g.agents.iter_mut().find(|a| a.id == id) else { return };
-        let min = a.spec.wake_min.unwrap_or(15).max(1) * 60;
+        let min = a.spec.wake_min.unwrap_or(5).max(1) * 60;
         let (kind, text) = match res {
             Ok(o) if o.ok => { a.wake_fails = 0; ("thought", o.text) }
             Ok(o) => { a.wake_fails += 1; limited = o.limited; ("error", o.text) }

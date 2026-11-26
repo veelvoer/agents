@@ -315,7 +315,7 @@ fun LifeSheet(agent: Agent, api: Api, onClose: () -> Unit, onSaved: () -> Unit) 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 if (sp.autonomous) TextButton({ scope.launch { try { withContext(Dispatchers.IO) { api.wakeNow(agent.id) }; onClose() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp)) { Text("Wake up now") }
                 OutlinedButton(onClose, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Close") }
-                if (sp.autonomous) Button({ scope.launch { try { withContext(Dispatchers.IO) { api.saveJournal(agent.id, journal); api.putOrders(agent.id, orders); api.save(agent.id, sp.copy(wakeMin = (wakeMin.toIntOrNull() ?: 15).coerceAtLeast(1), maxWakes = (maxWakes.toIntOrNull() ?: 24).coerceIn(1, 200))) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
+                if (sp.autonomous) Button({ scope.launch { try { withContext(Dispatchers.IO) { api.saveJournal(agent.id, journal); api.putOrders(agent.id, orders); api.save(agent.id, sp.copy(wakeMin = (wakeMin.toIntOrNull() ?: 5).coerceAtLeast(1), maxWakes = (maxWakes.toIntOrNull() ?: 24).coerceIn(1, 200))) }; onSaved() } catch (e: ApiError) { err = e.message ?: "" } } }, Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp)) { Text("Save") }
             }
         }
     }
